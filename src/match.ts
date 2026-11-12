@@ -57,6 +57,27 @@ export function artistHit(target: string, candidate: string): boolean {
   return c.length > 0 && c.includes(n)
 }
 
+/**
+ * 歌手严格匹配：候选里必须真的有人是目标歌手。
+ *
+ * 公开源（网易云/酷我）搜出来的翻唱、伴奏、改编版，歌名跟原唱一模一样，
+ * 只有歌手不一样。光比歌名会把「晴天 - 梦里啥都有」当成周杰伦的《晴天》放出来，
+ * 所以公开源要多比一层歌手。候选歌手是空的（查不到）时按「查不了就放行」处理。
+ */
+export function artistMatch(target: string, candidates: Array<string | undefined>): boolean {
+  if (!norm(target)) return true
+  for (const c of candidates) {
+    if (!c || !norm(c)) continue
+    if (artistHit(target, c)) return true
+  }
+  return false
+}
+
+/** 是不是「伴奏/DJ版/翻唱」这类衍生版本——原唱匹配时也不该选它。 */
+export function isVariant(title: string, artist = ''): boolean {
+  return variantTag(title, artist) !== null
+}
+
 export function durationClose(a: number, b: number, tolerance = 5): boolean {
   return a > 0 && b > 0 && Math.abs(a - b) <= tolerance
 }
@@ -87,6 +108,7 @@ const VARIANT_TAGS: Array<[RegExp, string]> = [
   [/\bremix\b/i, 'Remix'],
   [/\bdemo\b/i, 'Demo'],
   [/翻唱|\bcover\b/i, '翻唱'],
+  [/改编|翻奏|二胡|萨克斯|古筝/i, '改编版'],
   [/铃声|rington/i, '铃声'],
 ]
 

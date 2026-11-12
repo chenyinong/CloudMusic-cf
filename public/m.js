@@ -317,7 +317,16 @@ function renderAll() {
 /** 当前能用到的音源：登录夸克就能拿完整版，否则只有公开源的试听片段 */
 function sourceLabel() {
   const r = state.resolved
-  if (r && r.source) return { text: `${r.source} · ${r.partial ? '试听片段' : '完整版'}`, partial: !!r.partial }
+  if (r && r.source) {
+    const kind = r.partial ? '试听片段' : '完整版'
+    const tags = []
+    if (r.mismatch) tags.push('歌手对不上')
+    if (r.fallback) tags.push(r.fallback)
+    return {
+      text: tags.length ? `${r.source} · ${kind}（${tags.join(' · ')}）` : `${r.source} · ${kind}`,
+      partial: !!r.partial,
+    }
+  }
   if (state.resolving) return { text: '正在解析音源…', partial: false }
   if (state.cookie) return { text: '夸克 · 完整版', partial: false }
   return { text: '公开源 · 试听片段', partial: true }
@@ -550,7 +559,29 @@ function setPlayIcon() {
 const RESOLVED_KEY = 'cm.resolved'
 const RESOLVED_MAX = 80
 const resolvedMemo = new Map()        // 会话内快速命中
-function resolvedKey(t) { return t?.key || (t?.title ? `${t.title}|${t.artist || ''}` : '') }
+/**
+ * 缓存键 = 歌 + 夸克账号指纹。
+ *
+ * 少了账号这一段会出大问题：登录前解析出来的公开源结果（网易云/酷我）
+ * 会在本机缓存里躺 80 分钟，登录后照样先播它 —— 明明登录了夸克，
+ * 一大半歌还是公开源。换了夸克账号也一样：旧账号签的直链会 412。
+ */
+function cookieTag() {
+  const c = state.cookie || ''
+  if (!c) return 'none'
+  let h = 0
+  for (let i = 0; i < c.length; i++) h = (h * 31 + c.charCodeAt(i)) | 0
+  return String(h)
+}
+function resolvedKey(t) {
+  const k = t?.key || (t?.title ? `${t.title}|${t.artist || ''}` : '')
+  return k ? `${k}#${cookieTag()}` : ''
+}
+/** 换账号/重新登录后，旧的解析结果全部作废 */
+function clearResolvedCache() {
+  resolvedMemo.clear()
+  try { saveJSON(RESOLVED_KEY, {}) } catch { /* 忽略 */ }
+}
 function resolvedGet(t) {
   const k = resolvedKey(t)
   if (!k) return null
@@ -571,6 +602,7 @@ function resolvedPut(t, r) {
   const one = {
     url: r.url, source: r.source, partial: !!r.partial,
     durationSec: r.durationSec, fileName: r.fileName,
+    mismatch: !!r.mismatch, fallback: r.fallback || '',
     exp: Date.now() + 80 * 60 * 1000,   // 服务端直链有效期 2 小时，这里留余量
   }
   resolvedMemo.set(k, one)
@@ -674,7 +706,17 @@ function startResolved(i, t, resolved, fromCache, attempt) {
     }
     toast('播放失败：' + (e.message || '直链可能已失效'))
   })
-  if (!fromCache) toast(resolved.partial ? '只有试听片段，建议登录夸克' : '正在播放完整版')
+  if (!fromCache) {
+    toast(
+      resolved.fallback
+        ? `${resolved.fallback}，先用公开源`
+        : resolved.mismatch
+          ? '这个版本歌手对不上（不是原唱）'
+          : resolved.partial
+            ? '只有试听片段，建议登录夸克'
+            : '正在播放完整版'
+    )
+  }
   updateMediaSession(t)
   renderSourceInfo()
 }
@@ -1207,9 +1249,12 @@ function renderQuarkState() {
  * 不用手机本地时间做比较——手机时钟不准时会把云端旧值当新的，导致刚扫的码被覆盖。
  */
 function saveCookieLocal(cookie) {
+  const changed = (cookie || '') !== (state.cookie || '')
   state.cookie = cookie || ''
   localStorage.setItem('cm.cookie', state.cookie)
   localStorage.setItem('cm.cookieAt', '0')
+  // 换了账号（或重新登录）就作废本机缓存的解析结果，别再播登录前的公开源
+  if (changed) clearResolvedCache()
 }
 /** 把本机 Cookie 上传云端（覆盖旧的）；成功后用服务端时间戳做新旧比较 */
 async function uploadCookie() {
@@ -1225,6 +1270,7 @@ function applyCloudCookie(cloud, cloudAt) {
   state.cookie = cloud
   localStorage.setItem('cm.cookie', cloud)
   localStorage.setItem('cm.cookieAt', String(cloudAt || Date.now()))
+  clearResolvedCache()
   renderQuarkState()
   toast('已从云端恢复夸克 Cookie')
 }

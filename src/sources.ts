@@ -19,7 +19,7 @@ import {
   probeAudio,
   seal,
 } from './util'
-import { ABSOLUTE_PARTIAL_MAX_SEC, artistHit, keywords, sameTitle } from './match'
+import { ABSOLUTE_PARTIAL_MAX_SEC, artistHit, artistMatch, isVariant, keywords, sameTitle } from './match'
 import { quarkDirect } from './quark'
 
 const LMY = 'https://so.liumingye.cn'
@@ -37,8 +37,10 @@ const KW_HEADERS = { 'User-Agent': UA_PC, Referer: `${KUWO_SEARCH}/` }
 
 /** 夸克多久还没出结果，就先启动公开源兜底（夸克是主力，别一上来就打扰别人） */
 const PUBLIC_DELAY_MS = 1500
-/** 夸克整路上限，超时按「没找到」处理，交给公开源 */
-const QUARK_CAP_MS = 3000
+/** 夸克多久没进展就放弃（CF 边缘到国内音源的往返比本机慢，不能用死定时器砍） */
+const QUARK_STALL_MS = 5000
+/** 夸克整路总上限，防止一直挂着 */
+const QUARK_TOTAL_MS = 12000
 
 /** 把异常压成一句话，方便塞进 notes */
 function errMsg(e: unknown): string {
@@ -54,6 +56,14 @@ interface Cand {
   title: string
   fileName?: string
   total: number
+  /** 歌手跟要的不是一个（降级时用了别的歌手的版本） */
+  mismatch?: boolean
+}
+
+/** 夸克命中结果：cand 是直链，mismatch 表示这不是原唱（别的歌手的版本） */
+interface QuarkHit {
+  cand: Cand
+  mismatch: boolean
 }
 
 export interface ResolveResult {
@@ -64,11 +74,11 @@ export interface ResolveResult {
 }
 
 /**
- * 解析结果缓存：同一首歌反复切（列表来回点、上一首下一首）时，10 分钟内
- * 直接复用上次的结果，避免每次都重新搜源 + 探活 + 签发令牌。
+ * 解析结果缓存：同一首歌反复切（列表来回点、上一首下一首）时，30 分钟内
+ * 直接复用上次的结果，避免每次都重新搜源 + 签发令牌。
  * 这是 Worker 实例内存缓存，冷启动/多实例之间不共享，但已经能吃掉绝大部分重复解析。
  */
-const RESOLVE_TTL = 10 * 60 * 1000
+const RESOLVE_TTL = 30 * 60 * 1000
 const RESOLVE_CACHE_MAX = 200
 const resolveCache = new Map<string, { at: number; res: ResolveResult }>()
 /** 同一首歌正在解析时，第二个请求直接等第一个的结果（预取和播放常常同时到） */
@@ -94,7 +104,7 @@ export async function resolveTrack(req: ResolveRequest, secret: string): Promise
   const hit = resolveCache.get(key)
   // fresh=true 是「上次给的直链播不了，重来一次」，不能吃缓存
   if (!req.fresh && hit && Date.now() - hit.at < RESOLVE_TTL) {
-    return { ...hit.res, notes: [...hit.res.notes, '命中解析缓存（10 分钟内复用上次结果）'] }
+    return { ...hit.res, notes: [...hit.res.notes, '命中解析缓存（30 分钟内复用上次结果）'] }
   }
   const flying = resolveInflight.get(key)
   if (flying) return flying
@@ -161,7 +171,12 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     return 'ok'
   }
 
-  const done = async (c: Cand, partial: boolean): Promise<ResolveResult> => {
+  const done = async (
+    c: Cand,
+    partial: boolean,
+    mismatch = false,
+    fallback = ''
+  ): Promise<ResolveResult> => {
     const payload: StreamPayload = {
       u: c.url,
       c: c.cookie,
@@ -181,24 +196,34 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
       durationSec: req.durationSec,
       note,
       fileName: c.fileName,
+      mismatch: mismatch || undefined,
+      fallback: fallback || undefined,
     }
     // 复制一份：夸克超时的尾巴还可能往 notes 里追加，别污染缓存里的结果
     return { ok: true, resolved, notes: [...notes] }
   }
 
   // ── 夸克优先 ──────────────────────────────────────────────────────────
+  /** 夸克最后一次有进展的时间：卡住太久就交给公开源，进展中就一直等 */
+  let quarkAt = Date.now()
+  const touchQuark = () => {
+    quarkAt = Date.now()
+  }
   /** 夸克候选：签发直链 + 用签发时带回来的文件大小判是不是试听片段（省一次探活往返）。 */
   const quarkSign = async (h: LmyHit): Promise<Cand | null> => {
     const t0 = Date.now()
+    touchQuark()
     let c: Cand | null = null
     try {
       c = await quarkCandById(h.id, cookie)
     } catch (e) {
       notes.push(`夸克「${h.title}」签发失败（${errMsg(e)}，${Date.now() - t0}ms）`)
+      touchQuark()
       return null
     }
     if (!c) {
       notes.push(`夸克「${h.title}」拿不到直链（${Date.now() - t0}ms）`)
+      touchQuark()
       return null
     }
     c.title = h.title
@@ -206,13 +231,15 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     if (quarkIsPartial(c.total, req.durationSec)) {
       notes.push(`夸克「${h.title}」只有试听片段（${mb}MB，${Date.now() - t0}ms），继续找完整版`)
       partialFallback ??= c
+      touchQuark()
       return null
     }
     notes.push(`夸克「${h.title}」拿到完整版（${mb}MB，${Date.now() - t0}ms）`)
+    touchQuark()
     return c
   }
 
-  const quarkP = (async () => {
+  const quarkP = (async (): Promise<QuarkHit | null> => {
     if (req.skipQuark) {
       notes.push('夸克：本次跳过（直链反复失效，改用公开源）')
       return null
@@ -224,6 +251,7 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     // 搜歌结果里点了某条网盘资源 → 直接用它，别再搜一遍挑同名文件
     if (req.quarkId) {
       const c = await quarkCandById(req.quarkId, cookie).catch(() => null)
+      touchQuark()
       if (!c) {
         notes.push('夸克：指定的网盘资源不可用，改走搜索')
       } else {
@@ -233,26 +261,50 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
           notes.push(`夸克：指定资源只有试听片段（${mb}MB），改走搜索`)
         } else {
           notes.push(`夸克：指定资源「${c.fileName}」拿到完整版（${mb}MB）`)
-          return c
+          return { cand: c, mismatch: false }
         }
       }
     }
     const hits = await lmySearch(kws[0] ?? '')
+    touchQuark()
     notes.push(`下歌吧：搜到 ${hits.length} 条`)
     const same = hits.filter((h) => sameTitle(h.title, req.title))
-    const ordered = (same.length ? same : hits).sort(
-      (a, b) => Number(artistHit(req.artist, b.artist)) - Number(artistHit(req.artist, a.artist))
-    )
-    const top = ordered.slice(0, 3)
-    if (!top.length) return null
+    // 下歌吧的 artist 写的是上传者，翻唱会写自己的名字 —— 歌手对得上的先试
+    const artistOk = (h: LmyHit) => !h.artist || artistHit(req.artist, h.artist)
+    // 先按歌手排序再取前三个：不然原唱排在第 6 位就被前三个翻唱挤掉了
+    const pool = (same.length ? same : hits)
+      .slice()
+      .sort(
+        (a, b) => Number(artistHit(req.artist, b.artist)) - Number(artistHit(req.artist, a.artist))
+      )
+      .slice(0, 3)
+    const strictPool = pool.filter(artistOk)
+    const loosePool = pool.filter((h) => !artistOk(h))
+    if (!pool.length) return null
     const tCand = Date.now()
     // 先签第一个：中了就收工，省掉另外两个候选的签发往返；
     // 不中再把剩下的并行签，别一个个排队等
-    const first = await quarkSign(top[0])
-    if (first) return first
-    const rest = await Promise.all(top.slice(1).map(quarkSign))
+    const signPool = async (list: LmyHit[]): Promise<Cand | null> => {
+      if (!list.length) return null
+      const first = await quarkSign(list[0])
+      if (first) return first
+      const rest = await Promise.all(list.slice(1).map(quarkSign))
+      return rest.find((c): c is Cand => !!c) ?? null
+    }
+    const strictHit = await signPool(strictPool)
+    if (strictHit) {
+      notes.push(`下歌吧：候选签发共 ${Date.now() - tCand}ms`)
+      return { cand: strictHit, mismatch: false }
+    }
+    // 原唱那条拿不到，才退而求其次用别的歌手的版本（会标出来）
+    const looseHit = await signPool(loosePool)
     notes.push(`下歌吧：候选签发共 ${Date.now() - tCand}ms`)
-    return rest.find((c): c is Cand => !!c) ?? null
+    if (looseHit) {
+      looseHit.mismatch = true
+      notes.push('下歌吧里没有这首歌原唱的资源，这个是别的歌手的版本')
+      return { cand: looseHit, mismatch: true }
+    }
+    return null
   })()
 
   // ── 公开源：延迟启动 ──────────────────────────────────────────────────
@@ -270,8 +322,8 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
       ]).catch(
         () =>
           [
-            { cands: [], notes: [] },
-            { cands: [], notes: [] },
+            { cands: [], loose: [], notes: [] },
+            { cands: [], loose: [], notes: [] },
           ] as [Collected, Collected]
       )
     }
@@ -282,27 +334,42 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     void startPublic()
   }, PUBLIC_DELAY_MS)
 
-  // 夸克整路最多等 QUARK_CAP_MS，超时就当没找到，交给公开源
-  const quarkCand = await withCap(quarkP, QUARK_CAP_MS, () =>
-    notes.push(`夸克：超过 ${QUARK_CAP_MS}ms 还没签出来，交给公开源`)
+  // 夸克整路：卡住太久或超时就当没找到，交给公开源（进展中就一直等）
+  const quarkHit = await withProgressCap(
+    quarkP,
+    QUARK_STALL_MS,
+    QUARK_TOTAL_MS,
+    () => quarkAt,
+    (why) => notes.push(`夸克：${why}（${QUARK_STALL_MS}ms 没进展），交给公开源`)
   )
   clearTimeout(publicTimer)
-  if (quarkCand) {
+  if (quarkHit) {
     // 夸克赢了：公开源要是已经启动了就把请求掐掉，别继续麻烦上游
     abortPublic()
-    return done(quarkCand, false)
+    return done(quarkHit.cand, false, quarkHit.mismatch)
   }
 
   // 夸克没中：公开源顶上（已经在跑的就直接等结果）
   const [ne, kw] = await startPublic()
   notes.push(...ne.notes, ...kw.notes)
+  // 明明登录了夸克却没走夸克，把原因告诉前端（别让人以为是没登录）
+  const fallback = req.skipQuark ? '夸克直链失效' : cookie ? '夸克没找到这首歌' : ''
   for (const c of [...ne.cands, ...kw.cands]) {
-    if ((await probe(c)) === 'ok') return done(c, false)
+    if ((await probe(c)) === 'ok') return done(c, false, false, fallback)
+  }
+  // 公开源里没有原唱：只能拿翻唱顶上，明确标出来，别让人以为是原唱
+  for (const c of [...ne.loose, ...kw.loose]) {
+    if ((await probe(c)) === 'ok') {
+      notes.push('公开源里没有这首歌的原唱版本，这个是别的歌手的版本')
+      return done(c, false, true, fallback)
+    }
   }
 
-  if (partialFallback) {
+  // partialFallback 是在闭包里赋值的，TS 这里推不出来，断言一下类型
+  const fb = partialFallback as Cand | null
+  if (fb) {
     notes.push('所有音源都只有试听片段，用第一个兜底')
-    return done(partialFallback, true)
+    return done(fb, true, !!fb.mismatch, fallback)
   }
   notes.push(`⏱ 总耗时 ${Date.now() - tAll}ms`)
   return { ok: false, notes, error: '几个音源都没找到可播放的完整版' }
@@ -312,8 +379,25 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
 
 /** 一路音源收集到的候选直链（只收集，不探活，探活留到主流程按优先级做） */
 interface Collected {
+  /** 歌手对得上的（优先用） */
   cands: Cand[]
+  /** 歌名对得上但歌手对不上（没有原唱时的降级选项，要标出来） */
+  loose: Cand[]
   notes: string[]
+}
+
+/** 网易云搜索结果里的歌手名 */
+function neteaseArtists(song: any): string[] {
+  const out: string[] = []
+  for (const a of song?.artists ?? []) {
+    const n = String(a?.name ?? '').trim()
+    if (n) out.push(n)
+  }
+  for (const a of song?.alias ?? []) {
+    const n = String(a?.name ?? '').trim()
+    if (n) out.push(n)
+  }
+  return out
 }
 
 /** 网易云：直取或搜索出候选 id，取直链 */
@@ -323,10 +407,13 @@ async function collectNetease(
   signal?: AbortSignal
 ): Promise<Collected> {
   const cands: Cand[] = []
+  const loose: Cand[] = []
   const notes: string[] = []
   const ids: string[] = []
+  const looseIds: string[] = []
   const tSearch = Date.now()
   if (req.platformId) {
+    // 歌单自带的平台 id，本来就是平台上的那一条，直接用
     ids.push(req.platformId)
   } else if (kws[0]) {
     let d: any = null
@@ -341,14 +428,24 @@ async function collectNetease(
       notes.push(`网易云搜索失败：${errMsg(e)}`)
     }
     const songs: any[] = d?.result?.songs ?? []
+    // 歌名一样的，再看是不是衍生版本（伴奏/DJ版/翻唱…），最后比歌手
+    const same = songs.filter((s) => sameTitle(String(s.name ?? ''), req.title))
+    const plain = same.filter((s) => !isVariant(String(s.name ?? ''), neteaseArtists(s)[0] ?? ''))
+    const strict = plain.filter((s) => artistMatch(req.artist, neteaseArtists(s)))
+    const other = plain.filter((s) => !strict.includes(s))
     ids.push(
-      ...songs
-        .filter((s) => sameTitle(String(s.name ?? ''), req.title))
+      ...strict
+        .slice(0, 2)
+        .map((s) => String(s.id))
+    )
+    looseIds.push(
+      ...other
         .slice(0, 2)
         .map((s) => String(s.id))
     )
     notes.push(
-      `网易云：搜索「${kws[0]}」${Date.now() - tSearch}ms，返回 ${songs.length} 条，同名 ${ids.length} 条`
+      `网易云：搜索「${kws[0]}」${Date.now() - tSearch}ms，返回 ${songs.length} 条，` +
+        `同名 ${same.length} 条、歌手对得上 ${strict.length} 条`
     )
   }
   const tDirect = Date.now()
@@ -367,8 +464,20 @@ async function collectNetease(
       total: 0,
     })
   }
+  for (const id of looseIds.slice(0, 2)) {
+    const u = await neteaseDirect(id, signal)
+    if (!u) continue
+    loose.push({
+      url: u,
+      source: '网易云',
+      ref: `${NETEASE}/`,
+      ua: UA_NETEASE,
+      title: req.title,
+      total: 0,
+    })
+  }
   if (ids.length) notes.push(`网易云：取直链 ${Date.now() - tDirect}ms，拿到 ${cands.length} 条`)
-  return { cands, notes }
+  return { cands, loose, notes }
 }
 
 /** 酷我：搜索 → 转码，取直链 */
@@ -378,8 +487,9 @@ async function collectKuwo(
   signal?: AbortSignal
 ): Promise<Collected> {
   const cands: Cand[] = []
+  const loose: Cand[] = []
   const notes: string[] = []
-  if (!kws[0]) return { cands, notes }
+  if (!kws[0]) return { cands, loose, notes }
   const tSearch = Date.now()
   let text = ''
   try {
@@ -388,29 +498,57 @@ async function collectKuwo(
     notes.push(`酷我搜索失败：${errMsg(e)}`)
   }
   const rids: string[] = []
+  const looseRids: string[] = []
+  let skipped = 0
   for (const chunk of text.split('},{')) {
     if (field(chunk, 'ONLINE') !== '1') continue
     if (!/MP3/i.test(field(chunk, 'FORMATS') ?? '')) continue
+    const name = decodeEntities(field(chunk, 'SONGNAME') ?? '')
+    const artist = decodeEntities(field(chunk, 'ARTIST') ?? '')
+    // 歌名必须一样（原来根本不比歌名，搜到什么拿什么）
+    if (!sameTitle(name, req.title)) {
+      skipped++
+      continue
+    }
+    if (isVariant(name, artist)) {
+      skipped++
+      continue
+    }
     const rid = field(chunk, 'DC_TARGETID')
-    if (rid) rids.push(rid)
-    if (rids.length >= 2) break
+    if (!rid) continue
+    if (artistMatch(req.artist, [artist])) {
+      rids.push(rid)
+      if (rids.length >= 2) break
+    } else {
+      // 歌手对不上的先存着，别急着停 —— 原唱可能排在后面
+      looseRids.push(rid)
+    }
   }
-  notes.push(`酷我：搜索「${kws[0]}」${Date.now() - tSearch}ms，拿到 ${rids.length} 个可播 rid`)
+  notes.push(
+    `酷我：搜索「${kws[0]}」${Date.now() - tSearch}ms，歌手对得上 ${rids.length} 个可播 rid` +
+      (skipped ? `，跳过 ${skipped} 个歌名/版本不对的` : '')
+  )
   const tDirect = Date.now()
   for (const rid of rids) {
-    const t = await getText(
-      `${KUWO_ANTI}/anti.s?type=convert_url&format=mp3&rid=${rid}&br=128&response=url`,
-      KW_HEADERS,
-      9000,
-      signal
-    ).catch(() => '')
-    const m = /https?:\/\/[^\s'"<>]+\.(mp3|aac|flac)/i.exec(t)
-    if (!m) {
+    const u = await kuwoDirect(rid, signal)
+    if (!u) {
       notes.push(`酷我 ${rid}：拿不到直链`)
       continue
     }
     cands.push({
-      url: https(m[0]),
+      url: u,
+      source: '酷我',
+      ref: `${KUWO_SEARCH}/`,
+      ua: UA_PC,
+      title: req.title,
+      total: 0,
+    })
+  }
+  for (const rid of looseRids) {
+    const u = await kuwoDirect(rid, signal)
+    if (!u) continue
+    loose.push({
+      url: u,
       source: '酷我',
       ref: `${KUWO_SEARCH}/`,
       ua: UA_PC,
@@ -419,7 +557,19 @@ async function collectKuwo(
     })
   }
   if (rids.length) notes.push(`酷我：取直链 ${Date.now() - tDirect}ms，拿到 ${cands.length} 条`)
-  return { cands, notes }
+  return { cands, loose, notes }
+}
+
+/** 酷我：rid → 直链 */
+async function kuwoDirect(rid: string, signal?: AbortSignal): Promise<string | null> {
+  const t = await getText(
+    `${KUWO_ANTI}/anti.s?type=convert_url&format=mp3&rid=${rid}&br=128&response=url`,
+    KW_HEADERS,
+    9000,
+    signal
+  ).catch(() => '')
+  const m = /https?:\/\/[^\s'"<>]+\.(mp3|aac|flac)/i.exec(t)
+  return m ? https(m[0]) : null
 }
 
 interface LmyHit {
@@ -539,27 +689,42 @@ function quarkIsPartial(size: number, durationSec: number): boolean {
   return durationSec <= 0 && size < ABSOLUTE_PARTIAL_MAX_SEC * BYTES_PER_SEC
 }
 
-/** 给一条链路加时间上限：超时按「没结果」处理，别一直挂着。 */
-function withCap<T>(p: Promise<T>, ms: number, onTimeout: () => void): Promise<T | null> {
+/**
+ * 夸克整路的上限：
+ *   · stallMs —— 多久没有任何进展就放弃（夸克还在慢慢跑就一直等，不误伤慢链路）
+ *   · totalMs —— 整条路最多等多久（兜底，防止一直挂着）
+ */
+function withProgressCap<T>(
+  p: Promise<T>,
+  stallMs: number,
+  totalMs: number,
+  lastProgress: () => number,
+  onTimeout: (why: string) => void
+): Promise<T | null> {
+  const t0 = Date.now()
   return new Promise<T | null>((resolve) => {
     let settled = false
-    const timer = setTimeout(() => {
+    const timer = setInterval(() => {
       if (settled) return
+      const stalled = Date.now() - lastProgress() > stallMs
+      const over = Date.now() - t0 > totalMs
+      if (!stalled && !over) return
       settled = true
-      onTimeout()
+      clearInterval(timer)
+      onTimeout(stalled ? '卡住了' : '超时')
       resolve(null)
-    }, ms)
+    }, 400)
     p.then(
       (v) => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
+        clearInterval(timer)
         resolve(v)
       },
       () => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
+        clearInterval(timer)
         resolve(null)
       }
     )
@@ -573,8 +738,23 @@ function kuwoSearchUrl(kw: string): string {
   )
 }
 
-/** 酷我老接口返回的是 Python dict 文本，不是 JSON，用宽松正则抠字段。 */
+/**
+ * 酷我老接口返回的是 Python dict 文本，不是 JSON，用宽松正则抠字段。
+ *
+ * 字段名必须带引号一起匹配：不然 'HIT_BUT_OFFLINE' 会被当成 'ONLINE'、
+ * 'AARTIST' 会被当成 'ARTIST'，抠出来的值全错。
+ */
 function field(chunk: string, name: string): string | null {
-  const m = new RegExp(`['"]?${name}['"]?\\s*:\\s*['"]([^'"]*)['"]`).exec(chunk)
+  const m = new RegExp(`'${name}'\\s*:\\s*'([^']*)'`).exec(chunk)
   return m ? m[1] : null
+}
+
+/** 酷我返回的文本里带 &nbsp; 之类的实体，先还原再比歌名。 */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim()
 }

@@ -76,6 +76,10 @@ export interface Resolved {
   durationSec: number
   note: string
   fileName?: string
+  /** 歌手跟要的不是一个（公开源里没有原唱，只能拿翻唱顶上），前端要提示一下 */
+  mismatch?: boolean
+  /** 明明登录了夸克却没走夸克的原因，前端显示出来，免得用户以为没登录 */
+  fallback?: string
 }
 
 export interface ResolveRequest {

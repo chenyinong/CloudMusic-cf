@@ -148,7 +148,8 @@ function renderPlayer() {
   const r = state.resolved
   $('#np-title').textContent = t ? t.title : '未在播放'
   const tag = r
-    ? `${r.source}${r.partial ? ' · 只有试听片段' : ' · 完整版'}`
+    ? `${r.source}${r.partial ? ' · 只有试听片段' : ' · 完整版'}` +
+      `${r.mismatch ? '（歌手对不上）' : ''}${r.fallback ? `（${r.fallback}）` : ''}`
     : (t ? '待解析' : '导入歌单后点一首歌')
   $('#np-sub').textContent = t ? `${t.artist || '未知歌手'} · ${tag}` : tag
   $('#source-badge').textContent = r ? r.source : ''
@@ -300,7 +301,10 @@ function syncPlayerPage() {
   const r = state.resolved
   $('#pp-title').textContent = t ? t.title : '未在播放'
   $('#pp-artist').textContent = t ? `${t.artist || '未知歌手'}` : '导入歌单后点一首歌'
-  $('#pp-source').textContent = r ? `${r.source}${r.partial ? ' · 试听片段' : ' · 完整版'}` : ''
+  $('#pp-source').textContent = r
+    ? `${r.source}${r.partial ? ' · 试听片段' : ' · 完整版'}` +
+      `${r.mismatch ? '（歌手对不上）' : ''}${r.fallback ? `（${r.fallback}）` : ''}`
+    : ''
   const h = coverHue(t ? t.title : 'music')
   $('#pp-bg').style.background =
     `linear-gradient(180deg, hsl(${h} 55% 32% / .35), hsl(${(h + 40) % 360} 55% 22% / .95))`
@@ -540,8 +544,14 @@ async function playAt(i, attempt = 0) {
     audio.src = d.resolved.url
     await audio.play()
     setStatus(
-      d.resolved.partial ? '只有试听片段，建议更新夸克 Cookie' : '正在播放完整版',
-      !d.resolved.partial
+      d.resolved.fallback
+        ? `${d.resolved.fallback}，先用公开源`
+        : d.resolved.mismatch
+          ? '这个版本歌手对不上（不是原唱）'
+          : d.resolved.partial
+            ? '只有试听片段，建议更新夸克 Cookie'
+            : '正在播放完整版',
+      !d.resolved.partial && !d.resolved.mismatch && !d.resolved.fallback
     )
     updateMediaSession(t)
   } catch (e) {
