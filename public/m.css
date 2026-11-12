@@ -83,6 +83,8 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 /* 输入框后面紧跟的标签 / 按钮要留出间距，否则两个字段会挤在一起 */
 .lcard input + label, .lcard textarea + label { margin-top: 16px; }
 .lcard input + .btn, .lcard textarea + .btn { margin-top: 16px; }
+/* 账号卡的登录按钮：与密码框保持距离 */
+#l-acc-login, #acc-login { margin-top: 16px; }
 .lcard input[type=text], .lcard input[type=password], .lcard textarea, .lcard select,
 .modal-box input[type=text], .modal-box input[type=password], .modal-box select, .modal-box textarea,
 .search-field input {
