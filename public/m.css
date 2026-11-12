@@ -360,15 +360,6 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
   position: absolute; inset: 0;
   background: linear-gradient(180deg, rgba(0,0,0,.22), transparent 35%, transparent 62%, rgba(0,0,0,.30));
 }
-.pp-corner {
-  position: absolute; left: 20px; top: 18px; z-index: 1;
-  font-size: 11px; letter-spacing: 2px; font-weight: 700; color: rgba(255,255,255,.92);
-}
-.pp-cover-artist {
-  position: absolute; left: 20px; bottom: 18px; z-index: 1; right: 90px;
-  font-size: 19px; letter-spacing: 3px; font-family: Georgia, "Songti SC", serif;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 .pp-cover-index { position: absolute; right: 20px; bottom: 20px; z-index: 1; font-size: 11px; letter-spacing: 1.5px; }
 .pp-lyric-inner {
   width: 100%; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -461,25 +452,10 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .pl-head-main h2 { font-size: 19px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-head-main .muted { font-size: 12px; margin-top: 3px; display: block; }
 
-/* 音源提示：歌单页的「当前音源」条 + 详情页徽标 */
-.src-strip {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 9px 12px; margin-bottom: 2px; border-radius: 12px;
-  background: var(--surface-2); border: 1px solid var(--glass-line);
-  color: var(--muted); font-size: 12.5px; cursor: pointer;
-}
-.src-strip .src-ico { width: 16px; height: 16px; flex: none; fill: currentColor; }
-.src-strip b { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--text); }
-.src-strip.off b { color: #d2993b; }
-.src-badge {
-  display: inline-block; flex: none; padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 600; white-space: nowrap;
-  background: var(--surface-2); border: 1px solid var(--glass-line); color: var(--text);
-}
-.src-badge.off { color: #d2993b; }
-.pl-meta-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-.pl-meta-row .muted { margin-top: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
+/* 播放页：小红心下方的歌曲源标签 */
+.pp-right { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex: none; }
+.pp-src { font-size: 11px; color: var(--muted); letter-spacing: .3px; white-space: nowrap; padding-right: 2px; }
+.pp-src.partial { color: #d2993b; }
 .cpl { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid rgba(0, 0, 0, .06); }
 .cpl-main { flex: 1; min-width: 0; }
 .cpl-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

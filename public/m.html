@@ -162,12 +162,6 @@
         <p class="hint">支持 QQ 音乐歌单、网易云歌单；登录账号后导入的歌单会自动保存到云端。</p>
       </div>
 
-      <button id="pl-source" class="src-strip" type="button">
-        <svg class="src-ico"><use href="#i-music"/></svg>
-        <span>当前音源</span>
-        <b id="pl-source-text">—</b>
-      </button>
-
       <div class="group-title">我的歌单</div>
       <div id="plist-list" class="plist"></div>
     </section>
@@ -178,10 +172,7 @@
         <button id="pl-back" class="icon-btn" aria-label="返回"><svg><use href="#i-down"/></svg></button>
         <div class="pl-head-main">
           <h2 id="pl-title">歌单</h2>
-          <div class="pl-meta-row">
-            <span id="pl-meta" class="muted"></span>
-            <span id="pl-source-badge" class="src-badge"></span>
-          </div>
+          <span id="pl-meta" class="muted"></span>
         </div>
         <button id="pl-play-all" class="play-all" aria-label="播放全部"><svg><use href="#i-play"/></svg></button>
       </div>
@@ -298,7 +289,6 @@
     <div class="pp-pager" id="pp-pager">
       <div class="pp-page" data-view="cover">
         <div class="pp-cover-card" id="pp-cover">
-          <span id="pp-source" class="pp-corner"></span>
           <div class="pp-cover-fade"></div>
           <span id="pp-artist-oncover" class="pp-cover-artist"></span>
           <span id="pp-index" class="pp-cover-index"></span>
@@ -312,7 +302,10 @@
     <div class="pp-info">
       <div class="pp-title-row">
         <b id="pp-title" class="pp-title">未在播放</b>
-        <button id="pp-fav" class="pp-heart" aria-label="收藏"><svg><use href="#i-heart"/></svg></button>
+        <div class="pp-right">
+          <button id="pp-fav" class="pp-heart" aria-label="收藏"><svg><use href="#i-heart"/></svg></button>
+          <span id="pp-source" class="pp-src"></span>
+        </div>
       </div>
       <div id="pp-artist" class="pp-artist">未知歌手</div>
     </div>

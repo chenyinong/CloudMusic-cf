@@ -309,27 +309,23 @@ function renderAll() {
   renderPlists()
   renderMini()
   renderQuarkState()
-  renderSourceInfo()
 }
 
 /* ══════════ 音源提示 ══════════ */
 /** 当前能用到的音源：登录夸克就能拿完整版，否则只有公开源的试听片段 */
-function currentSource() {
-  if (state.cookie) return { label: '夸克 · 完整版', full: true }
-  return { label: '公开源 · 试听片段', full: false }
+function sourceLabel() {
+  const r = state.resolved
+  if (r && r.source) return { text: `${r.source} · ${r.partial ? '试听片段' : '完整版'}`, partial: !!r.partial }
+  if (state.cookie) return { text: '夸克 · 完整版', partial: false }
+  return { text: '公开源 · 试听片段', partial: true }
 }
-/** 刷新歌单页「当前音源」条 + 歌单详情页的音源徽标 */
+/** 刷新播放页的源标签（小红心下方） */
 function renderSourceInfo() {
-  const s = currentSource()
-  const txt = $('#pl-source-text')
-  if (txt) txt.textContent = s.label
-  const strip = $('#pl-source')
-  if (strip) strip.classList.toggle('off', !s.full)
-  const badge = $('#pl-source-badge')
-  if (badge) {
-    badge.textContent = s.label
-    badge.classList.toggle('off', !s.full)
-  }
+  const el = $('#pp-source')
+  if (!el) return
+  const s = sourceLabel()
+  el.textContent = s.text
+  el.classList.toggle('partial', s.partial)
 }
 
 /* ══════════ 歌单集合（本地 + 云端） ══════════ */
@@ -388,7 +384,6 @@ function renderDetail() {
   if (!p) return
   $('#pl-title').textContent = p.name
   $('#pl-meta').textContent = `${p.platform === 'qq' ? 'QQ 音乐' : '网易云'} · ${p.tracks?.length || 0} 首${p.synced ? ' · 已同步到云端' : ' · 仅本机'}`
-  renderSourceInfo()
   const root = $('#pl-tracks')
   if (!p.tracks?.length) { root.innerHTML = emptyBox('这个歌单还没有歌曲'); return }
   root.innerHTML = p.tracks.map((t, i) => songRow(t, i, { active: false, duration: true })).join('')
@@ -689,7 +684,7 @@ function syncPlayer() {
   $('#pp-title').textContent = t ? t.title : '未在播放'
   $('#pp-artist').textContent = t ? (t.artist || '未知歌手') : ''
   $('#pp-artist-oncover').textContent = t ? (t.artist || t.title) : ''
-  $('#pp-source').textContent = r ? `${r.source} · ${r.partial ? '试听片段' : '原音质'}` : ''
+  renderSourceInfo()   // 小红心下方的源标签
   const n = state.playlist?.tracks?.length || 0
   $('#pp-index').textContent = n ? `${String(state.index + 1).padStart(2, '0')} / ${String(n).padStart(2, '0')}` : ''
   const cover = $('#pp-cover')
@@ -1083,11 +1078,6 @@ $('#play-all').addEventListener('click', () => {
 
 // 歌单详情
 $('#pl-back').addEventListener('click', () => switchTab('playlist'))
-// 点「当前音源」条 → 去设置里处理夸克登录
-$('#pl-source').addEventListener('click', () => {
-  switchTab('settings')
-  toast(state.cookie ? '夸克已登录，播放优先取完整版' : '未登录夸克，只有公开音源的试听片段')
-})
 $('#pl-play-all').addEventListener('click', () => {
   const p = state.detail
   if (p?.tracks?.length) playFromList(p.tracks, 0, p.name)
