@@ -413,6 +413,17 @@ async function deletePlaylist(id) {
     try { await api('/api/playlists/' + p.cloudId, { method: 'DELETE' }) }
     catch (e) { toast('删除云端歌单失败：' + e.message); return }
   }
+  // 带 tracks 的是**本机导入的原件**（没登录时导入的，或者云端存失败的）。
+  // 云端那份删了就删了，本机这份留着 —— 副本和原件得分清。
+  if (p.tracks?.length) {
+    p.synced = false
+    p.cloudId = null
+    p.id = 'l' + Date.now()
+    savePlists()
+    renderPlists()
+    toast('云端那份已删除，本机歌单保留')
+    return
+  }
   state.plists = state.plists.filter((x) => x.id !== id)
   savePlists()
   renderPlists()

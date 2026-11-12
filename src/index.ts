@@ -19,6 +19,7 @@ import {
   listPlaylists,
   getPlaylist,
   deletePlaylist,
+  updatePlaylistTracks,
   getUserSetting,
   saveUserSetting,
   deleteUserSetting,
@@ -28,7 +29,7 @@ import {
 } from './store'
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
 
     if (request.method === 'OPTIONS') return json({})
@@ -263,11 +264,21 @@ export default {
       if (!Array.isArray(tracks)) return json({ error: 'tracks 必须是数组' }, 400)
       const name = (b.name ?? '我的歌单').trim() || '我的歌单'
       const platform = (b.platform ?? 'netease').trim() || 'netease'
+      const id = await savePlaylist(env.DB, uid, name, platform, JSON.stringify(tracks))
       // 封面口径跟网页版一致：歌单封面 = 第一首歌的封面。
       // 上传的歌单通常不带封面字段（安卓上传的就没有），补上之后
       // 列表接口和网页版才都取得到同一个封面。
-      const withCover = await ensureFirstCover(tracks)
-      const id = await savePlaylist(env.DB, uid, name, platform, JSON.stringify(withCover))
+      //
+      // 补封面要打外部搜索接口，耗时几秒 —— 丢到后台慢慢补，
+      // 上传这一下立刻就返回，不然用户干等着。
+      ctx.waitUntil(
+        (async () => {
+          const withCover = await ensureFirstCover(tracks)
+          if (withCover !== tracks) {
+            await updatePlaylistTracks(env.DB, id, uid, JSON.stringify(withCover))
+          }
+        })().catch(() => {})
+      )
       return json({ id, name, platform })
     }
     if (url.pathname.startsWith('/api/playlists/') && request.method === 'GET') {

@@ -127,6 +127,26 @@ export async function savePlaylist(
   return Number(r.meta.last_row_id)
 }
 
+/**
+ * 补写歌单的曲目 JSON（后台补封面时用）。
+ *
+ * 补封面要走外部搜索接口，耗时几秒；放进响应之后慢慢补，
+ * 别让「上传歌单」干等着。
+ */
+export async function updatePlaylistTracks(
+  db: D1Database,
+  id: number,
+  userId: number,
+  tracksJson: string
+): Promise<void> {
+  await db
+    .prepare(
+      'UPDATE playlists SET tracks = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+    )
+    .bind(tracksJson, Date.now(), id, userId)
+    .run()
+}
+
 export async function listPlaylists(
   db: D1Database,
   userId: number
