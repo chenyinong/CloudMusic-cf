@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>后台管理 · 云音乐</title>
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>后台管理</h1>
+    <p class="sub">用管理员密码登录后可创建普通用户（用于各自保存歌单）</p>
+
+    <!-- 登录 -->
+    <div id="login-box" class="card">
+      <label for="pw">管理员密码</label>
+      <input id="pw" type="password" placeholder="默认 admin888" />
+      <button id="login" class="btn primary block">登录</button>
+      <p id="login-msg" class="msg"></p>
+    </div>
+
+    <!-- 管理 -->
+    <div id="admin-box" class="card" hidden>
+      <div class="row-between">
+        <b>用户列表</b>
+        <button id="logout" class="btn text">退出登录</button>
+      </div>
+
+      <div class="add">
+        <input id="nu" type="text" placeholder="新用户名" />
+        <input id="np" type="password" placeholder="密码" />
+        <button id="add" class="btn primary">添加用户</button>
+      </div>
+      <p id="add-msg" class="msg"></p>
+
+      <ul id="users" class="users"></ul>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/admin.js"></script>
+</body>
+</html>

@@ -41,12 +41,20 @@ Cloudflare Workers + PWA 版「云音乐」。导入 QQ 音乐 / 网易云歌单
 - 独立的登录 / 欢迎页（可跳过）。
 - 歌曲列表封面用 `IntersectionObserver` 按需懒加载，避免一次请求上百张图。
 
+### 账号与云端歌单（两套界面都有）
+- **不强制登录**：不登录照样能用，数据只存在本机 `localStorage`。
+- **账号登录**：用管理员在后台创建的用户名 + 密码登录；移动版可在**登录页直接登录**，登录后进入主界面。
+- **歌单同步**：登录后「保存当前歌单到云端」把歌单存进 Cloudflare D1；「加载」可把云端歌单恢复到本机，换手机 / 清缓存都不丢。
+- **后台管理** `/admin.html`：管理员密码登录（默认 `admin888`，可用 `ADMIN_PASSWORD` secret 覆盖），可添加 / 删除用户、查看用户列表。
+- 每个用户只能看到自己的歌单，删除用户会连带删掉其全部歌单。
+- 密码用 **PBKDF2-SHA256 加盐**（10 万次迭代）存储，服务端不存明文；会话令牌用 **HMAC-SHA256** 签名（复用 `STREAM_SECRET`），30 天有效，存在浏览器本地。
+
 ### 界面与设置
 - **主题**：跟随系统 / 浅色 / 深色。
 - **在线歌词开关**：关闭后不请求歌词接口。
 - **夸克扫码登录** + 手动粘贴 Cookie。
 - 歌曲封面走「歌单元数据 → QQ 音乐 → iTunes US」来源链，严格匹配歌名歌手；查不到时画安卓同款程序化占位图（渐变天空 + 圆日 + 三层山影）。
-- PWA：可「添加到主屏幕」独立运行，含 iOS 主屏图标、状态栏主题色、安全区适配与离线静态资源缓存（Service Worker 缓存版本 `cloudmusic-cf-v3`）。
+- PWA：可「添加到主屏幕」独立运行，含 iOS 主屏图标、状态栏主题色、安全区适配与离线静态资源缓存（Service Worker 缓存版本 `cloudmusic-cf-v5`）。
 
 ### 移动端（iPhone）特别处理
 - **音频手势解锁**：Safari 要求 `play()` 在用户手势的同步调用栈里，而本项目需要先异步解析音源。首次交互时用一段 0.05 秒静音 wav 解锁 `<audio>` 元素；若仍被拒绝，会弹出「点此开始播放」兜底。
@@ -74,9 +82,30 @@ wrangler secret put STREAM_SECRET     # 必做：一串长随机字符串
 wrangler deploy
 # 可选：把夸克 Cookie 放服务端，前端就不必填
 wrangler secret put QUARK_COOKIE
+# 可选：覆盖后台管理员密码（默认 admin888）
+wrangler secret put ADMIN_PASSWORD
 ```
 
-`wrangler.toml` 里的 `STREAM_SECRET = "dev-only-change-me"` **只是本地开发占位值**，它用来给直链令牌和登录态做 AES-GCM 加密。部署前务必用上面的 `wrangler secret put` 覆盖：secret 优先级高于 `[vars]`，且不会写进仓库。仓库是公开的话尤其不要沿用默认值。
+`wrangler.toml` 里的 `STREAM_SECRET = "dev-only-change-me"` **只是本地开发占位值**，它用来给直链令牌和登录态做 AES-GCM 加密，也用来签发账号会话令牌。部署前务必用上面的 `wrangler secret put` 覆盖：secret 优先级高于 `[vars]`，且不会写进仓库。仓库是公开的话尤其不要沿用默认值。
+
+### 启用账号与云端歌单（D1）
+
+账号和歌单存在 **Cloudflare D1**，首次部署按下面三步走：
+
+```bash
+# 1. 建库，把返回的 database_id 填进 wrangler.toml 的 [[d1_databases]]
+wrangler d1 create cloudmusic-cf
+
+# 2. 建表（users / playlists）
+wrangler d1 execute cloudmusic-cf --remote --file=schema.sql
+
+# 3. 重新部署，让新绑定生效
+wrangler deploy
+```
+
+本地开发不用建远程库，`wrangler dev` 会自动用 `.wrangler/state` 下的本地 SQLite；本地建表跑一次 `wrangler d1 execute cloudmusic-cf --local --file=schema.sql` 即可。
+
+建好后访问 `https://你的域名/admin.html`，用管理员密码（默认 `admin888`）登录，就能添加用户名和密码；然后用户在网页上用这组账号登录并同步歌单。**公网部署务必用 `wrangler secret put ADMIN_PASSWORD` 改掉默认密码。**
 
 部署后先打开 `/api/health` 确认连通；要让 iPhone 能访问，需要是公网 HTTPS 地址（`localhost` 手机连不上）。
 
@@ -108,6 +137,8 @@ Worker 无状态，登录过程的 `_UP_*` 会话 Cookie 和 token 用 AES-GCM �
 | `cm.covers` | 封面地址缓存（含负缓存与同专辑复用，带时间戳） |
 | `cm.onlineLyric` / `cm.theme` | 在线歌词开关 / 主题 |
 | `cm.loggedIn` | 移动版是否已通过登录页 |
+| `cm.account` | 账号登录态（会话令牌 + 用户名） |
+| `cm.adminToken` | 后台管理令牌（仅 `/admin.html` 使用） |
 | `cm.desktop`（sessionStorage） | 豁免手机自动跳转 |
 
 清除本机数据：移动版「设置 → 清除本地数据」，或直接清站点数据。
@@ -129,11 +160,15 @@ src/
   match.ts        歌名 / 歌手匹配
   util.ts         HTTP、AES-GCM 封印、Cookie 合并等工具
   types.ts        类型定义
+  auth.ts         PBKDF2 密码哈希 + HMAC 会话令牌
+  store.ts        D1 存储层：用户与歌单
 public/
   index.html / app.js / style.css          桌面版
   m.html / m.js / m.css                   移动版
+  admin.html / admin.js / admin.css       后台管理（添加 / 删除用户）
   sw.js                                   Service Worker
   manifest.webmanifest / icon*.png / icon.svg / apple-touch-icon.png
+schema.sql        D1 建表语句（users / playlists）
 wrangler.toml     Workers 配置
 ```
 
@@ -154,6 +189,18 @@ wrangler.toml     Workers 配置
 | `POST /api/cover` | `{ title, artist, album?, coverUrl? }` | `{ url, source, strict }`；`source` 为 `metadata` / `qq` / `itunes` / `loose` / `none` |
 | `GET /api/cover-img?u=` | 封面原图地址（CDN 白名单） | 同源代理图片，供 canvas 取色与规避防盗链 |
 | `GET /api/stream?t=` | 加密令牌 | 带 Cookie / Referer / UA 的流式代理，透传 Range |
+| `POST /api/admin/login` | `{ password }` | `{ token }`，后台管理员令牌 |
+| `GET /api/admin/users` | — | 用户列表（需管理员令牌） |
+| `POST /api/admin/users` | `{ username, password }` | 创建用户（需管理员令牌），用户名重复返回 409 |
+| `DELETE /api/admin/users/:id` | — | 删除用户及其全部歌单（需管理员令牌） |
+| `POST /api/auth/login` | `{ username, password }` | `{ token, username }`，普通用户令牌 |
+| `GET /api/me` | — | `{ id, username }`，当前登录用户（需用户令牌） |
+| `GET /api/playlists` | — | 当前用户的云端歌单列表 |
+| `POST /api/playlists` | `{ name, platform, tracks }` | 新建云端歌单，返回 `{ id, name, platform }` |
+| `GET /api/playlists/:id` | — | 歌单详情（含 `tracks` JSON） |
+| `DELETE /api/playlists/:id` | — | 删除歌单 |
+
+需要登录的接口用请求头 `Authorization: Bearer <token>` 鉴权；管理员令牌与用户令牌权限隔离（管理员令牌访问用户接口返回 401，用户只能读写自己的歌单，越权读取返回 404）。
 
 `/api/resolve` 的 Cookie 也可通过 `X-Quark-Cookie` 请求头或服务端 `QUARK_COOKIE` secret 提供。夸克 CDN 返回 412（Cookie / `__puus` 不匹配）时，流式代理会带上 `X-Cloudmusic-Error: quark-412`，提示前端去刷新登录态。
 
@@ -182,3 +229,5 @@ wrangler.toml     Workers 配置
 - 没有歌单元数据的老歌单，封面靠 QQ / iTunes 在线检索，可能与原专辑封面不完全一致；入库后即缓存，不会重复查。
 - 安卓的「网盘同目录封面图」「音频文件内嵌封面（ID3/FLAC）」两档是网盘播放器专属，网页版无对应数据来源，未实现。
 - 搜索点歌目前只走网易云搜索；播放模式、歌词偏移、主题、收藏、封面结果都持久化在 `localStorage`，只有本会话内的并发去重表（`coverCache`）不落盘。
+- 账号体系只有用户名 + 密码，没有邮箱找回 / 改密 / 验证码，也没有注册接口（用户必须由管理员在后台创建）；令牌存在浏览器本地，换设备需重新登录。
+- 后台 `/admin.html` 没有登录失败次数限制，公网部署请务必改掉默认管理员密码 `admin888`。

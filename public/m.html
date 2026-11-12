@@ -53,6 +53,23 @@
       <div class="lcard-head">
         <span class="brand-icon"><svg><use href="#i-cloud"/></svg></span>
         <div class="lcard-title">
+          <b>云音乐账号</b>
+          <span class="muted">登录后可把歌单同步到云端</span>
+        </div>
+        <span id="l-acc-badge" class="badge off">未登录</span>
+      </div>
+      <label for="l-acc-user">用户名</label>
+      <input id="l-acc-user" type="text" placeholder="后台创建的用户名" autocomplete="username" />
+      <label for="l-acc-pass">密码</label>
+      <input id="l-acc-pass" type="password" placeholder="密码" autocomplete="current-password" />
+      <button id="l-acc-login" class="btn primary block">登录账号</button>
+      <p id="l-acc-msg" class="hint"></p>
+    </div>
+
+    <div class="lcard">
+      <div class="lcard-head">
+        <span class="brand-icon"><svg><use href="#i-cloud"/></svg></span>
+        <div class="lcard-title">
           <b>夸克网盘</b>
           <span id="login-state" class="muted">未登录 · 只能听公开音源</span>
         </div>
@@ -162,6 +179,29 @@
 
     <!-- 设置 -->
     <section class="page" data-page="settings" hidden>
+      <div class="group-title">账号与同步</div>
+      <div class="lcard" id="acc-card">
+        <div id="acc-out">
+          <label for="acc-user">用户名</label>
+          <input id="acc-user" type="text" placeholder="后台创建的用户名" autocomplete="username" />
+          <label for="acc-pass">密码</label>
+          <input id="acc-pass" type="password" placeholder="密码" autocomplete="current-password" />
+          <button id="acc-login" class="btn primary block">登录账号</button>
+          <p id="acc-msg" class="hint"></p>
+        </div>
+        <div id="acc-in" hidden>
+          <div class="lcard-head">
+            <span class="brand-icon"><svg><use href="#i-cloud"/></svg></span>
+            <div class="lcard-title"><b>已登录</b><span id="acc-name" class="muted"></span></div>
+          </div>
+          <button id="acc-save" class="btn primary block">保存当前歌单到云端</button>
+          <p class="hint">导入或播放中的歌单会上传，换设备登录可恢复。</p>
+          <div class="group-title sm">云端歌单</div>
+          <div id="acc-list" class="songlist"></div>
+          <button id="acc-logout" class="btn text block">退出登录</button>
+        </div>
+      </div>
+
       <div class="group-title">网盘连接</div>
       <div class="lcard">
         <div class="lcard-head">

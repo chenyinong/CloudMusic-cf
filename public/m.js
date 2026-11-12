@@ -25,6 +25,7 @@ const state = {
   tab: 'library',
   sort: 0,
   filter: '',
+  account: loadJSON('cm.account'),
 }
 let lyricLines = []
 let lyricActive = -1
@@ -63,6 +64,20 @@ async function post(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  const d = await r.json().catch(() => ({ error: '返回不是 JSON' }))
+  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
+  return d
+}
+/** 带账号令牌的请求（登录后自动附加 Authorization），并处理 401 失效 */
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (state.account?.token) headers.Authorization = 'Bearer ' + state.account.token
+  const r = await fetch(path, {
+    method: opts.method || 'GET',
+    headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  })
+  if (r.status === 401) { logoutAccount(true); throw new Error('登录已失效，请重新登录') }
   const d = await r.json().catch(() => ({ error: '返回不是 JSON' }))
   if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
   return d
@@ -726,6 +741,38 @@ function showLogin() {
   $('#app').hidden = true
   $('#login').hidden = false
   renderQuarkState()
+  renderLoginAccount()
+}
+/** 登录页顶部的账号状态徽标 */
+function renderLoginAccount() {
+  const b = $('#l-acc-badge')
+  if (!b) return
+  if (state.account?.token) {
+    b.textContent = '已登录'
+    b.className = 'badge'
+  } else {
+    b.textContent = '未登录'
+    b.className = 'badge off'
+  }
+}
+/** 在登录页直接用账号登录，登录后直接进入主界面 */
+function loginAccountFromLogin() {
+  const msg = $('#l-acc-msg')
+  msg.textContent = ''
+  const username = $('#l-acc-user').value.trim()
+  const password = $('#l-acc-pass').value
+  if (!username || !password) { msg.textContent = '用户名和密码都要填'; return }
+  api('/api/auth/login', { method: 'POST', body: { username, password } })
+    .then((d) => {
+      state.account = { token: d.token, username: d.username }
+      saveJSON('cm.account', state.account)
+      localStorage.setItem('cm.loggedIn', '1')
+      $('#l-acc-pass').value = ''
+      showApp()
+      renderAccount()
+      toast('登录成功，可同步歌单了')
+    })
+    .catch((e) => { msg.textContent = e.message })
 }
 
 /* ══════════ 事件绑定 ══════════ */
@@ -818,6 +865,108 @@ $('#l-enter').addEventListener('click', () => {
   localStorage.setItem('cm.loggedIn', '1')
   showApp()
 })
+
+// 账号与云端歌单同步
+function renderAccount() {
+  const out = $('#acc-out'), inn = $('#acc-in')
+  if (state.account?.token) {
+    out.hidden = true
+    inn.hidden = false
+    $('#acc-name').textContent = ' · ' + (state.account.username || '')
+    loadCloudList()
+  } else {
+    out.hidden = false
+    inn.hidden = true
+  }
+}
+function loginAccount() {
+  const msg = $('#acc-msg')
+  msg.textContent = ''
+  msg.className = 'hint'
+  const username = $('#acc-user').value.trim()
+  const password = $('#acc-pass').value
+  if (!username || !password) { msg.textContent = '用户名和密码都要填'; return }
+  api('/api/auth/login', { method: 'POST', body: { username, password } })
+    .then((d) => {
+      state.account = { token: d.token, username: d.username }
+      saveJSON('cm.account', state.account)
+      $('#acc-pass').value = ''
+      renderAccount()
+      toast('登录成功，可同步歌单了')
+    })
+    .catch((e) => { msg.textContent = e.message })
+}
+function logoutAccount(silent) {
+  state.account = null
+  localStorage.removeItem('cm.account')
+  $('#acc-out').hidden = false
+  $('#acc-in').hidden = true
+  renderLoginAccount()
+  if (!silent) toast('已退出登录')
+}
+async function loadCloudList() {
+  const root = $('#acc-list')
+  root.innerHTML = '<div class="empty">加载中…</div>'
+  try {
+    const list = await api('/api/playlists')
+    if (!list.length) { root.innerHTML = '<div class="empty">还没有云端歌单，点上方保存</div>'; return }
+    root.innerHTML = list.map((p) => `
+      <div class="cpl">
+        <div class="cpl-main">
+          <div class="cpl-title">${esc(p.name)}</div>
+          <div class="cpl-sub">${esc(p.platform === 'qq' ? 'QQ 音乐' : '网易云')} · ${new Date(p.updated_at).toLocaleDateString()}</div>
+        </div>
+        <button class="cpl-act" data-act="load" data-id="${p.id}">加载</button>
+        <button class="cpl-act danger" data-act="del" data-id="${p.id}">删除</button>
+      </div>`).join('')
+    root.querySelectorAll('[data-act]').forEach((b) =>
+      b.addEventListener('click', () =>
+        b.dataset.act === 'load' ? openCloud(Number(b.dataset.id)) : deleteCloud(Number(b.dataset.id)))
+    )
+  } catch (e) {
+    root.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'
+  }
+}
+async function saveCloud() {
+  if (!state.account?.token) { toast('先登录账号'); return }
+  if (!state.playlist?.tracks?.length) { toast('当前没有歌单可保存'); return }
+  const name = prompt('给云端歌单起个名字', state.playlist.name || '我的歌单')
+  if (name === null) return
+  try {
+    await api('/api/playlists', { method: 'POST', body: {
+      name: name.trim() || '我的歌单',
+      platform: state.playlist.platform || 'netease',
+      tracks: state.playlist.tracks,
+    } })
+    toast('已保存到云端')
+    loadCloudList()
+  } catch (e) { toast('保存失败：' + e.message) }
+}
+async function openCloud(id) {
+  try {
+    const pl = await api('/api/playlists/' + id)
+    state.playlist = { name: pl.name, platform: pl.platform, id: pl.id, tracks: JSON.parse(pl.tracks) }
+    state.index = -1
+    state.resolved = null
+    saveJSON('cm.playlist', state.playlist)
+    renderAll()
+    switchTab('library')
+    toast('已从云端载入')
+  } catch (e) { toast('载入失败：' + e.message) }
+}
+async function deleteCloud(id) {
+  if (!confirm('删除这条云端歌单？')) return
+  try { await api('/api/playlists/' + id, { method: 'DELETE' }); loadCloudList() }
+  catch (e) { toast('删除失败：' + e.message) }
+}
+$('#acc-login').addEventListener('click', loginAccount)
+$('#acc-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') loginAccount() })
+$('#acc-save').addEventListener('click', saveCloud)
+$('#acc-logout').addEventListener('click', () => logoutAccount(false))
+
+// 登录页的账号登录
+$('#l-acc-login').addEventListener('click', loginAccountFromLogin)
+$('#l-acc-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') loginAccountFromLogin() })
 $('#l-skip').addEventListener('click', () => { localStorage.setItem('cm.loggedIn', '1'); showApp() })
 
 // 迷你播放器
@@ -962,6 +1111,7 @@ $('#set-theme').value = localStorage.getItem('cm.theme') || 'system'
 $('#set-online-lyric').checked = state.onlineLyric
 if (localStorage.getItem('cm.loggedIn') === '1') showApp()
 else showLogin()
+renderAccount()
 renderQuarkState()
 
 // 开发期不注册 SW，避免反复改页面却看到旧缓存；生产域名才启用 PWA

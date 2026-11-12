@@ -18,6 +18,7 @@ const state = {
   onlineLyric: localStorage.getItem('cm.onlineLyric') !== 'off',
   lyricOffset: Number(localStorage.getItem('cm.lyricOffset') || 0),
   sleep: null, // { type: 'time'|'track', endsAt? }
+  account: loadJSON('cm.account'),
 }
 let lyricLines = []
 let lyricActive = -1
@@ -54,6 +55,20 @@ async function post(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  const d = await r.json().catch(() => ({ error: '返回不是 JSON' }))
+  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
+  return d
+}
+/** 带账号令牌的请求，401 时清空登录态 */
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (state.account?.token) headers.Authorization = 'Bearer ' + state.account.token
+  const r = await fetch(path, {
+    method: opts.method || 'GET',
+    headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  })
+  if (r.status === 401) { logoutAccountD(true); throw new Error('登录已失效，请重新登录') }
   const d = await r.json().catch(() => ({ error: '返回不是 JSON' }))
   if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
   return d
@@ -661,6 +676,7 @@ $('#btn-settings').addEventListener('click', () => {
   $('#cookie').value = state.cookie
   $('#theme').value = localStorage.getItem('cm.theme') || 'system'
   $('#online-lyric').checked = state.onlineLyric
+  renderAccount()
   $('#settings').hidden = false
 })
 let loginTimer = null
@@ -690,6 +706,90 @@ $('#online-lyric').addEventListener('change', () => {
   state.onlineLyric = $('#online-lyric').checked
   localStorage.setItem('cm.onlineLyric', state.onlineLyric ? 'on' : 'off')
 })
+
+// 账号与云端歌单同步
+function renderAccount() {
+  const out = $('#acc-out'), inn = $('#acc-in')
+  if (state.account?.token) {
+    out.hidden = true; inn.hidden = false
+    $('#acc-name').textContent = state.account.username || ''
+    loadCloudList()
+  } else { out.hidden = false; inn.hidden = true }
+}
+function loginAccountD() {
+  const msg = $('#acc-msg'); msg.textContent = ''
+  const username = $('#acc-user').value.trim(), password = $('#acc-pass').value
+  if (!username || !password) { msg.textContent = '用户名和密码都要填'; return }
+  api('/api/auth/login', { method: 'POST', body: { username, password } })
+    .then((d) => {
+      state.account = { token: d.token, username: d.username }
+      saveJSON('cm.account', state.account)
+      $('#acc-pass').value = ''
+      renderAccount()
+      setStatus('登录成功，可同步歌单', true)
+    })
+    .catch((e) => { msg.textContent = e.message })
+}
+function logoutAccountD(silent) {
+  state.account = null
+  localStorage.removeItem('cm.account')
+  $('#acc-out').hidden = false
+  $('#acc-in').hidden = true
+  if (!silent) setStatus('已退出登录', true)
+}
+async function loadCloudList() {
+  const root = $('#acc-list')
+  root.innerHTML = '<div class="empty">加载中…</div>'
+  try {
+    const list = await api('/api/playlists')
+    if (!list.length) { root.innerHTML = '<div class="empty">还没有云端歌单，点上方保存</div>'; return }
+    root.innerHTML = list.map((p) => `
+      <div class="cpl">
+        <div class="cpl-main"><div class="cpl-title">${esc(p.name)}</div><div class="cpl-sub">${esc(p.platform === 'qq' ? 'QQ 音乐' : '网易云')} · ${new Date(p.updated_at).toLocaleDateString()}</div></div>
+        <button class="cpl-act" data-act="load" data-id="${p.id}">加载</button>
+        <button class="cpl-act danger" data-act="del" data-id="${p.id}">删除</button>
+      </div>`).join('')
+    root.querySelectorAll('[data-act]').forEach((b) =>
+      b.addEventListener('click', () =>
+        b.dataset.act === 'load' ? openCloud(Number(b.dataset.id)) : deleteCloud(Number(b.dataset.id)))
+    )
+  } catch (e) { root.innerHTML = '<div class="empty">' + esc(e.message) + '</div>' }
+}
+async function saveCloudD() {
+  if (!state.account?.token) { setStatus('先登录账号', false); return }
+  if (!state.playlist?.tracks?.length) { setStatus('当前没有歌单可保存', false); return }
+  const name = prompt('给云端歌单起个名字', state.playlist.name || '我的歌单')
+  if (name === null) return
+  try {
+    await api('/api/playlists', { method: 'POST', body: {
+      name: name.trim() || '我的歌单',
+      platform: state.playlist.platform || 'netease',
+      tracks: state.playlist.tracks,
+    } })
+    setStatus('已保存到云端', true)
+    loadCloudList()
+  } catch (e) { setStatus('保存失败：' + e.message, false) }
+}
+async function openCloud(id) {
+  try {
+    const pl = await api('/api/playlists/' + id)
+    state.playlist = { name: pl.name, platform: pl.platform, id: pl.id, tracks: JSON.parse(pl.tracks) }
+    state.index = -1
+    state.resolved = null
+    saveJSON('cm.playlist', state.playlist)
+    renderList()
+    setStatus(`已从云端载入：${pl.name}`, true)
+  } catch (e) { setStatus('载入失败：' + e.message, false) }
+}
+async function deleteCloud(id) {
+  if (!confirm('删除这条云端歌单？')) return
+  try { await api('/api/playlists/' + id, { method: 'DELETE' }); loadCloudList() }
+  catch (e) { setStatus('删除失败：' + e.message, false) }
+}
+$('#acc-login').addEventListener('click', loginAccountD)
+$('#acc-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') loginAccountD() })
+$('#acc-save').addEventListener('click', saveCloudD)
+$('#acc-logout').addEventListener('click', () => logoutAccountD(false))
 
 $('#btn-qr-login').addEventListener('click', async () => {
   const btn = $('#btn-qr-login')
@@ -810,3 +910,4 @@ if ('serviceWorker' in navigator) {
   if (!dev) navigator.serviceWorker.register('/sw.js').catch(() => {})
 }
 applyTheme()
+renderAccount()

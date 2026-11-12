@@ -1,4 +1,4 @@
-const CACHE = 'cloudmusic-cf-v4'
+const CACHE = 'cloudmusic-cf-v5'
 const PRECACHE = [
   '/', '/app.js', '/style.css', '/cover.js',
   '/m.html', '/m.css', '/m.js',

@@ -4,4 +4,5 @@ dist/
 .dev.vars
 wrangler-dev.log
 *.log
+*.err
 .DS_Store

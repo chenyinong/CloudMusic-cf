@@ -206,6 +206,23 @@
       <textarea id="cookie" rows="3" placeholder="扫码登录会自动填这里；也可手动粘贴完整 Cookie（含 __pus）"></textarea>
       <p class="hint">填了才会走夸克完整版；不填时只用网易云 / 酷我，可能只有 30 秒试听片段。Cookie 只存在本机浏览器，不在服务端留存。</p>
 
+      <div class="divider">账号与同步</div>
+      <div class="login-box" id="acc-card">
+        <div id="acc-out">
+          <input id="acc-user" type="text" placeholder="后台创建的用户名" style="margin-bottom:8px" />
+          <input id="acc-pass" type="password" placeholder="密码" style="margin-bottom:8px" />
+          <button id="acc-login" class="primary">登录账号</button>
+          <span id="acc-msg" class="muted"></span>
+        </div>
+        <div id="acc-in" hidden>
+          <div class="divider">已登录：<span id="acc-name"></span></div>
+          <button id="acc-save" class="primary">保存当前歌单到云端</button>
+          <p class="hint">导入或播放中的歌单会上传，换设备登录可恢复。</p>
+          <div id="acc-list" class="tracks"></div>
+          <button id="acc-logout" class="ghost">退出登录</button>
+        </div>
+      </div>
+
       <div class="divider">外观与歌词</div>
       <label for="theme">主题</label>
       <select id="theme">

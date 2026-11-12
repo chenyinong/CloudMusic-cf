@@ -15,5 +15,11 @@ STREAM_SECRET = "dev-only-change-me"
 directory = "./public"
 binding = "ASSETS"
 
+# 账号与歌单存储（wrangler d1 create cloudmusic-cf）
+[[d1_databases]]
+binding = "DB"
+database_name = "cloudmusic-cf"
+database_id = "982989b1-273f-42f5-b837-e27cda0a31d9"
+
 [observability]
 enabled = true

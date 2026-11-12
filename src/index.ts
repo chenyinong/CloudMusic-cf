@@ -6,6 +6,18 @@ import { qrSvg } from './qr'
 import { resolveTrack } from './sources'
 import { fetchLyric } from './lyric'
 import { http, json, unseal, withCors, UA_PC } from './util'
+import { hashPassword, verifyPassword, signToken, verifyToken } from './auth'
+import {
+  createUser,
+  getUserByName,
+  getUserById,
+  listUsers,
+  deleteUser,
+  savePlaylist,
+  listPlaylists,
+  getPlaylist,
+  deletePlaylist,
+} from './store'
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -157,6 +169,102 @@ export default {
       out.set('Cache-Control', 'public, max-age=86400')
       out.set('Access-Control-Allow-Origin', '*')
       return new Response(upstream.body, { headers: out })
+    }
+
+    // ── 账户体系（自建账号 + 后台 admin888 管理 + D1 存歌单） ──────────────
+    const bearer = (req: Request): string => {
+      const h = req.headers.get('Authorization') || ''
+      return h.startsWith('Bearer ') ? h.slice(7) : ''
+    }
+    const requireUser = async (req: Request): Promise<number | null> => {
+      const c = await verifyToken(bearer(req), env.STREAM_SECRET)
+      return c && c.role === 'user' ? c.sub : null
+    }
+    const requireAdmin = async (req: Request): Promise<boolean> => {
+      const c = await verifyToken(bearer(req), env.STREAM_SECRET)
+      return !!c && c.role === 'admin'
+    }
+
+    const adminPw = env.ADMIN_PASSWORD || 'admin888'
+
+    // 后台登录（密码来自 ADMIN_PASSWORD，默认 admin888）
+    if (url.pathname === '/api/admin/login' && request.method === 'POST') {
+      const b = (await request.json().catch(() => ({}))) as { password?: string }
+      if ((b.password ?? '') !== adminPw) return json({ error: '管理员密码错误' }, 401)
+      const token = await signToken({ sub: 0, role: 'admin' }, env.STREAM_SECRET)
+      return json({ token })
+    }
+    if (url.pathname === '/api/admin/users' && request.method === 'GET') {
+      if (!(await requireAdmin(request))) return json({ error: '未授权' }, 401)
+      return json(await listUsers(env.DB))
+    }
+    if (url.pathname === '/api/admin/users' && request.method === 'POST') {
+      if (!(await requireAdmin(request))) return json({ error: '未授权' }, 401)
+      const b = (await request.json().catch(() => ({}))) as { username?: string; password?: string }
+      const username = (b.username ?? '').trim()
+      const password = b.password ?? ''
+      if (!username || !password) return json({ error: '用户名和密码必填' }, 400)
+      if (await getUserByName(env.DB, username)) return json({ error: '用户名已存在' }, 409)
+      await createUser(env.DB, username, await hashPassword(password))
+      return json({ ok: true })
+    }
+    if (url.pathname.startsWith('/api/admin/users/') && request.method === 'DELETE') {
+      if (!(await requireAdmin(request))) return json({ error: '未授权' }, 401)
+      const id = Number(url.pathname.split('/').pop())
+      if (id > 0) await deleteUser(env.DB, id)
+      return json({ ok: true })
+    }
+
+    // 普通用户登录
+    if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+      const b = (await request.json().catch(() => ({}))) as { username?: string; password?: string }
+      const username = (b.username ?? '').trim()
+      const u = await getUserByName(env.DB, username)
+      if (!u || !(await verifyPassword(b.password ?? '', u.password_hash))) {
+        return json({ error: '用户名或密码错误' }, 401)
+      }
+      const token = await signToken({ sub: u.id, role: 'user' }, env.STREAM_SECRET)
+      return json({ token, username: u.username })
+    }
+    if (url.pathname === '/api/me' && request.method === 'GET') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const u = await getUserById(env.DB, uid)
+      return json({ id: uid, username: u?.username ?? '' })
+    }
+
+    // 歌单同步（登录后可用）
+    if (url.pathname === '/api/playlists' && request.method === 'GET') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      return json(await listPlaylists(env.DB, uid))
+    }
+    if (url.pathname === '/api/playlists' && request.method === 'POST') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const b = (await request.json().catch(() => ({}))) as {
+        name?: string; platform?: string; tracks?: unknown
+      }
+      const tracks = b.tracks
+      if (!Array.isArray(tracks)) return json({ error: 'tracks 必须是数组' }, 400)
+      const name = (b.name ?? '我的歌单').trim() || '我的歌单'
+      const platform = (b.platform ?? 'netease').trim() || 'netease'
+      const id = await savePlaylist(env.DB, uid, name, platform, JSON.stringify(tracks))
+      return json({ id, name, platform })
+    }
+    if (url.pathname.startsWith('/api/playlists/') && request.method === 'GET') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const id = Number(url.pathname.split('/').pop())
+      const pl = await getPlaylist(env.DB, id, uid)
+      return pl ? json(pl) : json({ error: '找不到歌单' }, 404)
+    }
+    if (url.pathname.startsWith('/api/playlists/') && request.method === 'DELETE') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const id = Number(url.pathname.split('/').pop())
+      await deletePlaylist(env.DB, id, uid)
+      return json({ ok: true })
     }
 
     // 直链流式代理：令牌自包含上游地址 + Cookie，客户端看不到凭据
