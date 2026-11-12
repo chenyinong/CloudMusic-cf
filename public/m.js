@@ -483,12 +483,26 @@ function renderMini() {
   const mini = $('#mini')
   mini.hidden = !t
   if (!t) return
-  $('#mini-text').textContent = `${t.title}${t.artist ? ' - ' + t.artist : ''}`
+  const txt = `${t.title}${t.artist ? ' - ' + t.artist : ''}`
+  const box = $('#mini-text')
+  const mq = box?.querySelector('.mq')
+  if (mq) mq.querySelectorAll('span').forEach((s) => { s.textContent = txt })
+  else box.textContent = txt
+  syncMiniMarquee()
   const cover = $('#mini-cover')
   fillCover(cover, t)
   cover.classList.toggle('spin', !audio.paused)
   cover.classList.toggle('paused', audio.paused)
   $('#mini-play').innerHTML = `<svg><use href="#${audio.paused ? 'i-play' : 'i-pause'}"/></svg>`
+}
+/** 迷你播放器里的歌名-歌手太长时改成走马灯（两份一样的文字首尾相接，循环无缝） */
+function syncMiniMarquee() {
+  const box = $('#mini-text')
+  const mq = box?.querySelector('.mq')
+  if (!box || !mq) return
+  const one = mq.querySelector('span')
+  box.classList.remove('scroll')
+  if (one && one.scrollWidth > box.clientWidth + 2) box.classList.add('scroll')
 }
 function setPlayIcon() {
   $('#mini-play').innerHTML = `<svg><use href="#${audio.paused ? 'i-play' : 'i-pause'}"/></svg>`
@@ -1873,6 +1887,8 @@ $('#tap-play').addEventListener('click', () => {
 /* ══════════ audio 事件 ══════════ */
 audio.addEventListener('play', () => { setPlayIcon(); renderMini() })
 audio.addEventListener('pause', () => { setPlayIcon(); })
+// 屏幕旋转 / 窗口变化后重新判断迷你播放器要不要走马灯
+window.addEventListener('resize', () => syncMiniMarquee())
 audio.addEventListener('timeupdate', () => {
   syncTime()
   if (ppOpen) { highlightLyric(); renderSleep() }

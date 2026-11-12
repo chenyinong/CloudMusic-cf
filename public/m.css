@@ -302,8 +302,13 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .mini-text {
   flex: 1; min-width: 0; font-size: 14px; font-weight: 700;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  overflow: hidden; white-space: nowrap;
 }
+/* 走马灯：歌名歌手太长就横向滚动，两份一样的文案首尾相接，循环无缝 */
+.mini-text .mq { display: flex; width: max-content; }
+.mini-text .mq span { flex: none; padding-right: 30px; }
+.mini-text.scroll .mq { animation: mini-marquee 13s linear infinite; }
+@keyframes mini-marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
 .mini-round {
   width: 36px; height: 36px; border-radius: 50%; flex: none;
   background: var(--surface); border: 1px solid var(--line);
@@ -345,7 +350,7 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .pp-inner {
   position: relative; z-index: 1; height: 100%;
   display: flex; flex-direction: column;
-  padding: calc(8px + var(--safe-t)) 28px calc(18px + var(--safe-b));
+  padding: calc(8px + var(--safe-t)) 28px calc(46px + var(--safe-b));
 }
 .pp-top { display: flex; align-items: center; justify-content: space-between; flex: none; height: 48px; }
 .pp-icon {
@@ -404,7 +409,9 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .pp-heart svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .pp-heart.on { color: #E5484D; }
 .pp-heart.on svg { fill: currentColor; }
-.pp-artist { font-size: 13px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 歌手和音源标签同一行，基线对齐，别一个上一个下 */
+.pp-sub-row { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.pp-artist { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pp-seek { display: flex; align-items: center; gap: 10px; flex: none; padding: 12px 0 2px; font-size: 11px; color: var(--muted); }
 .pp-seek input[type=range] { flex: 1; accent-color: var(--primary); height: 4px; }
 .pp-sleep { text-align: center; font-size: 11px; color: var(--muted); min-height: 15px; flex: none; }
@@ -497,9 +504,8 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .pl-head-main h2 { font-size: 19px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-head-main .muted { font-size: 12px; margin-top: 3px; display: block; }
 
-/* 播放页：小红心下方的歌曲源标签 */
-.pp-right { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex: none; }
-.pp-src { font-size: 11px; color: var(--muted); letter-spacing: .3px; white-space: nowrap; padding-right: 2px; }
+/* 播放页：音源标签跟在歌手同一行右侧 */
+.pp-src { flex: none; font-size: 11px; color: var(--muted); letter-spacing: .3px; white-space: nowrap; }
 .pp-src.partial { color: #d2993b; }
 .cpl { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid rgba(0, 0, 0, .06); }
 .cpl-main { flex: 1; min-width: 0; }

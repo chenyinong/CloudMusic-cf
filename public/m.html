@@ -15,7 +15,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
-  <link rel="stylesheet" href="/m.css?v=18" />
+  <link rel="stylesheet" href="/m.css?v=19" />
 </head>
 <body>
 
@@ -277,7 +277,7 @@
     <div class="mini-progress"><i id="mini-progress-fill"></i></div>
     <div class="mini-row">
       <div id="mini-cover" class="mini-cover"><span class="cover-letter" id="mini-letter">♪</span></div>
-      <div id="mini-text" class="mini-text">未在播放</div>
+      <div id="mini-text" class="mini-text"><div class="mq"><span>未在播放</span><span>未在播放</span></div></div>
       <button id="mini-play" class="mini-round" aria-label="播放/暂停"><svg><use href="#i-play"/></svg></button>
       <button id="mini-next" class="mini-ico" aria-label="下一首"><svg><use href="#i-next"/></svg></button>
       <button id="mini-queue" class="mini-ico" aria-label="播放列表"><svg><use href="#i-queue"/></svg></button>
@@ -319,12 +319,12 @@
     <div class="pp-info">
       <div class="pp-title-row">
         <b id="pp-title" class="pp-title">未在播放</b>
-        <div class="pp-right">
-          <button id="pp-fav" class="pp-heart" aria-label="收藏"><svg><use href="#i-heart"/></svg></button>
-          <span id="pp-source" class="pp-src"></span>
-        </div>
+        <button id="pp-fav" class="pp-heart" aria-label="收藏"><svg><use href="#i-heart"/></svg></button>
       </div>
-      <div id="pp-artist" class="pp-artist">未知歌手</div>
+      <div class="pp-sub-row">
+        <span id="pp-artist" class="pp-artist">未知歌手</span>
+        <span id="pp-source" class="pp-src"></span>
+      </div>
     </div>
 
     <div class="pp-seek">
@@ -403,7 +403,7 @@
 <div id="toast" class="toast" hidden></div>
 
 <audio id="audio" preload="metadata" playsinline webkit-playsinline x5-playsinline></audio>
-<script src="/cover.js?v=18"></script>
-<script src="/m.js?v=18"></script>
+<script src="/cover.js?v=19"></script>
+<script src="/m.js?v=19"></script>
 </body>
 </html>
