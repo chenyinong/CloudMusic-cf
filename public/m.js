@@ -1153,6 +1153,36 @@ $('#set-clear').addEventListener('click', () => {
 })
 $('#set-desktop').addEventListener('click', () => { sessionStorage.setItem('cm.desktop', '1'); location.href = '/' })
 
+/* ══════════ 添加到主屏幕（PWA 安装） ══════════ */
+let installPrompt = null
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    navigator.standalone === true
+}
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  installPrompt = e
+})
+window.addEventListener('appinstalled', () => {
+  installPrompt = null
+  toast('已添加到主屏幕')
+})
+$('#set-install').addEventListener('click', async () => {
+  if (isStandalone()) { toast('已经在主屏幕应用里运行了'); return }
+  if (installPrompt) {
+    installPrompt.prompt()
+    const r = await installPrompt.userChoice
+    installPrompt = null
+    if (r?.outcome === 'accepted') toast('正在添加到主屏幕…')
+    else toast('已取消添加')
+    return
+  }
+  toast('浏览器菜单里选「添加到主屏幕 / 安装应用」')
+})
+// 已经是 App 形态就隐藏这一行
+if (isStandalone()) $('#set-install').hidden = true
+
 // 登录页
 $('#l-enter').addEventListener('click', async () => {
   const c = $('#l-cookie').value.trim()

@@ -38,6 +38,7 @@
   <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></symbol>
   <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M10.6 9.1 14 5.8l2.2 2.2-1.4 1.4 1.4 1.4 2.8-2.8-3.6-3.6-4.8 4.7 1.4 1.4 2.6-2.4zM3 7h3.2l3.4 3.4 1.4-1.4L7.6 5.6 8.4 4.8H3V7zm14 10.2-2.2-2.2 1.4-1.4-1.4-1.4-2.8 2.8 3.6 3.6 4.8-4.7-1.4-1.4-2.6 2.5zM3 17h3.2l9-9H21v-2h-6.6l-9 9H3v2zm11.8 3H21v-3.4l-3.4 3.4H14.8z"/></symbol>
   <symbol id="i-repeat-one" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2v-4h-1l-2 1v1h1.5v2H13z"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm3 17h4v1h-4v-1z"/></symbol>
 </svg>
 
 <!-- ══════════════ 登录 / 欢迎页（仿安卓 LoginScreen） ══════════════ -->
@@ -243,6 +244,12 @@
         </select>
         <label class="switch-row"><input type="checkbox" id="set-online-lyric" /><span>在线歌词</span></label>
         <p class="hint">优先匹配在线歌词；关闭后不加载歌词。</p>
+      </div>
+
+      <div class="group-title">应用</div>
+      <div class="lcard">
+        <button id="set-install" class="list-row"><svg><use href="#i-phone"/></svg><span>添加到主屏幕</span><b>›</b></button>
+        <p class="hint">装到桌面后像 App 一样全屏打开，没有浏览器地址栏。</p>
       </div>
 
       <div class="group-title">维护</div>
