@@ -20,6 +20,9 @@ import {
   getUserSetting,
   saveUserSetting,
   deleteUserSetting,
+  listFavorites,
+  addFavorite,
+  removeFavorite,
 } from './store'
 
 export default {
@@ -297,6 +300,44 @@ export default {
       const uid = await requireUser(request)
       if (!uid) return json({ error: '未登录' }, 401)
       await deleteUserSetting(env.DB, uid)
+      return json({ ok: true })
+    }
+
+    // 收藏（小红心）云端同步
+    if (url.pathname === '/api/favorites' && request.method === 'GET') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const rows = await listFavorites(env.DB, uid)
+      return json(
+        rows.map((r) => {
+          let track: unknown = null
+          try { track = JSON.parse(r.track) } catch { track = null }
+          return {
+            key: r.key,
+            track,
+            deleted: !!r.deleted,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+          }
+        })
+      )
+    }
+    if (url.pathname === '/api/favorites' && request.method === 'POST') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const b = (await request.json().catch(() => ({}))) as { key?: string; track?: unknown }
+      const key = (b.key ?? '').trim()
+      if (!key) return json({ error: 'key 必填' }, 400)
+      if (!b.track || typeof b.track !== 'object') return json({ error: 'track 必填' }, 400)
+      await addFavorite(env.DB, uid, key, JSON.stringify(b.track))
+      return json({ ok: true, key })
+    }
+    if (url.pathname.startsWith('/api/favorites/') && request.method === 'DELETE') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const key = decodeURIComponent(url.pathname.slice('/api/favorites/'.length)).trim()
+      if (!key) return json({ error: 'key 必填' }, 400)
+      await removeFavorite(env.DB, uid, key)
       return json({ ok: true })
     }
 

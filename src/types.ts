@@ -29,6 +29,16 @@ export interface UserSettingRow {
   updated_at: number
 }
 
+export interface FavoriteRow {
+  id: number
+  user_id: number
+  key: string
+  track: string
+  created_at: number
+  updated_at: number
+  deleted: number
+}
+
 export type Platform = 'netease' | 'qq'
 
 export interface Track {

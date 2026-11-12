@@ -27,3 +27,19 @@ CREATE TABLE IF NOT EXISTS user_settings (
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+-- 收藏（小红心）：每个用户按歌曲 key 唯一
+-- deleted=1 表示「已取消收藏」的墓碑记录，保留它才不会在多设备间被旧数据复活
+CREATE TABLE IF NOT EXISTS favorites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  "key" TEXT NOT NULL,
+  track TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(user_id, "key"),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);

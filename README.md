@@ -50,6 +50,7 @@ Cloudflare Workers + PWA 版「云音乐」。导入 QQ 音乐 / 网易云歌单
 - **歌单集合**：登录后自动把云端歌单拉回「我的歌单」列表；点列表项打开（云端歌单按需拉取曲目），删除会同时删掉云端那条。
 - **夸克 Cookie 云端同步**：登录后本机 Cookie 会自动上传 D1（**AES-GCM 加密后存储**），换设备登录即可直接取回；扫码或手动换了新 Cookie 会覆盖云端旧值。两端同时存在时按「谁新用谁」自动取舍（本机带时间戳 `cm.cookieAt`，云端带 `updatedAt`）。
 - **后台管理** `/admin.html`：管理员密码登录（默认 `admin888`，可用 `ADMIN_PASSWORD` secret 覆盖），可添加 / 删除用户、查看用户列表。
+- **收藏云端同步**：登录后收藏（小红心）自动上云，换设备登录即可看到；多设备按 key 合并，云端被取消的收藏会同步删掉本机那条（软删除留墓碑，避免旧设备把歌「复活」）。没登录时收藏只存本机。
 - 每个用户只能看到自己的歌单，删除用户会连带删掉其全部歌单。
 - 密码用 **PBKDF2-SHA256 加盐**（10 万次迭代）存储，服务端不存明文；会话令牌用 **HMAC-SHA256** 签名（复用 `STREAM_SECRET`），30 天有效，存在浏览器本地。
 
@@ -100,7 +101,7 @@ wrangler secret put ADMIN_PASSWORD
 # 1. 建库，把返回的 database_id 填进 wrangler.toml 的 [[d1_databases]]
 wrangler d1 create cloudmusic-cf
 
-# 2. 建表（users / playlists / user_settings）
+# 2. 建表（users / playlists / user_settings / favorites）
 wrangler d1 execute cloudmusic-cf --remote --file=schema.sql
 
 # 3. 重新部署，让新绑定生效
@@ -140,7 +141,7 @@ Worker 无状态，登录过程的 `_UP_*` 会话 Cookie 和 token 用 AES-GCM �
 | `cm.plists` | 歌单集合（我的歌单）：已同步的只存元数据，曲目按需从云端拉 |
 | `cm.cookie` | 夸克 Cookie |
 | `cm.cookieAt` | 夸克 Cookie 保存时间戳（与云端比新旧用） |
-| `cm.favs` | 收藏的歌曲（移动版「我的」页） |
+| `cm.favs` | 收藏的歌曲（移动版「我的」页；登录后与云端合并） |
 | `cm.playMode` / `cm.lyricOffset` | 播放模式 / 歌词偏移 |
 | `cm.covers` | 封面地址缓存（含负缓存与同专辑复用，带时间戳） |
 | `cm.onlineLyric` / `cm.theme` | 在线歌词开关 / 主题 |
@@ -210,6 +211,9 @@ wrangler.toml     Workers 配置
 | `GET /api/settings/quark` | — | 云端夸克 Cookie：`{ hasCookie, cookie?, updatedAt }` |
 | `POST /api/settings/quark` | `{ cookie }` | 保存（覆盖）云端夸克 Cookie，返回 `{ ok, updatedAt }`；传空串等于清除 |
 | `DELETE /api/settings/quark` | — | 清除云端夸克 Cookie |
+| `GET /api/favorites` | — | 云端收藏列表：`[{ key, track, deleted, createdAt, updatedAt }]` |
+| `POST /api/favorites` | `{ key, track }` | 收藏一首（幂等），重新收藏会清掉取消标记 |
+| `DELETE /api/favorites/:key` | — | 取消收藏（软删除留墓碑，避免旧设备复活） |
 
 需要登录的接口用请求头 `Authorization: Bearer <token>` 鉴权；管理员令牌与用户令牌权限隔离（管理员令牌访问用户接口返回 401，用户只能读写自己的歌单，越权读取返回 404）。
 
@@ -239,7 +243,7 @@ wrangler.toml     Workers 配置
 - iOS Safari 的自动播放策略较严格，已做静音解锁 + 「点此开始播放」兜底；后台 / 锁屏连续播放仍受系统与浏览器策略影响，建议真机验证。
 - 没有歌单元数据的老歌单，封面靠 QQ / iTunes 在线检索，可能与原专辑封面不完全一致；入库后即缓存，不会重复查。
 - 安卓的「网盘同目录封面图」「音频文件内嵌封面（ID3/FLAC）」两档是网盘播放器专属，网页版无对应数据来源，未实现。
-- 搜索点歌目前只走网易云搜索；播放模式、歌词偏移、主题、收藏、封面结果都持久化在 `localStorage`，只有本会话内的并发去重表（`coverCache`）不落盘。
+- 搜索点歌目前只走网易云搜索；播放模式、歌词偏移、主题、收藏、封面结果都持久化在 `localStorage`，只有本会话内的并发去重表（`coverCache`）不落盘；收藏在登录后额外同步到 D1。
 - 账号体系只有用户名 + 密码，没有邮箱找回 / 改密 / 验证码，也没有注册接口（用户必须由管理员在后台创建）；令牌存在浏览器本地，换设备需重新登录。
 - 云端夸克 Cookie 用 `STREAM_SECRET` 做 AES-GCM 加密后存 D1：**一旦更换 `STREAM_SECRET`，库里已存的 Cookie 就解不开**，需要重新扫码登录一次。Cookie 等同于网盘登录凭据，务必用 `wrangler secret put ADMIN_PASSWORD` 之外的强 `STREAM_SECRET`，并只在自己的账号下使用。
 - 后台 `/admin.html` 没有登录失败次数限制，公网部署请务必改掉默认管理员密码 `admin888`。

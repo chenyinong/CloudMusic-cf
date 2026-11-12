@@ -684,11 +684,13 @@ function toggleFav() {
   const t = current()
   if (!t) return
   const i = state.favs.findIndex((f) => f.key === t.key)
-  if (i >= 0) { state.favs.splice(i, 1); toast('已取消收藏') }
-  else { state.favs.unshift({ ...t }); toast('已收藏') }
+  const added = i < 0
+  if (added) { state.favs.unshift({ ...t }); toast('已收藏') }
+  else { state.favs.splice(i, 1); toast('已取消收藏') }
   saveJSON('cm.favs', state.favs)
   $('#pp-fav').classList.toggle('on', isFav(t))
   renderLibrary()
+  syncFavToCloud(t, added)
 }
 function syncTime() {
   const d = audio.duration
@@ -877,6 +879,47 @@ async function syncCookieFromCloud() {
   } catch { /* 云端取不到就继续用本机的 */ }
 }
 
+/* ══════════ 收藏云端同步 ══════════ */
+/** 收藏/取消收藏后增量同步到云端 */
+async function syncFavToCloud(track, added) {
+  if (!state.account?.token || !track?.key) return
+  try {
+    if (added) await api('/api/favorites', { method: 'POST', body: { key: track.key, track } })
+    else await api('/api/favorites/' + encodeURIComponent(track.key), { method: 'DELETE' })
+  } catch { /* 云端失败不影响本机使用 */ }
+}
+/** 登录后合并云端收藏：云端独有的补进本机，云端取消过的本机也删掉，本机独有的补传云端 */
+async function syncFavsFromCloud() {
+  if (!state.account?.token) return
+  try {
+    const list = await api('/api/favorites')
+    if (!Array.isArray(list)) return
+    const cloudKeys = new Set()
+    let changed = false
+    for (const it of list) {
+      const k = it?.key
+      if (!k) continue
+      cloudKeys.add(k)
+      const i = state.favs.findIndex((f) => f.key === k)
+      if (it.deleted) {
+        if (i >= 0) { state.favs.splice(i, 1); changed = true }   // 别的设备取消了收藏
+        continue
+      }
+      const t = it.track
+      if (t?.key && i < 0) { state.favs.unshift(t); changed = true }
+    }
+    for (const f of state.favs) {
+      if (f?.key && !cloudKeys.has(f.key)) {
+        await api('/api/favorites', { method: 'POST', body: { key: f.key, track: f } })
+      }
+    }
+    if (changed) {
+      saveJSON('cm.favs', state.favs)
+      renderLibrary()
+    }
+  } catch { /* 云端取不到就继续用本机的 */ }
+}
+
 let loginTimer = null
 async function beginQuarkLogin(prefix) {
   const btn = $(`#${prefix}-qr`)
@@ -965,6 +1008,7 @@ function loginAccountFromLogin() {
       renderAccount()
       toast('登录成功，可同步歌单了')
       await syncCookieFromCloud()
+      await syncFavsFromCloud()
       await loadCloudLists()
       await syncLocalLists()
     })
@@ -1100,6 +1144,7 @@ function loginAccount() {
       renderAccount()
       toast('登录成功，可同步歌单了')
       await syncCookieFromCloud()
+      await syncFavsFromCloud()
       await loadCloudLists()
       await syncLocalLists()
     })
@@ -1200,11 +1245,13 @@ $('#sheet').addEventListener('click', (e) => {
     case 'favthis': {
       if (!t) break
       const i = state.favs.findIndex((f) => f.key === t.key)
-      if (i >= 0) state.favs.splice(i, 1)
-      else state.favs.unshift({ ...t })
+      const added = i < 0
+      if (added) state.favs.unshift({ ...t })
+      else state.favs.splice(i, 1)
       saveJSON('cm.favs', state.favs)
       renderLibrary()
-      toast(i >= 0 ? '已取消收藏' : '已收藏')
+      toast(added ? '已收藏' : '已取消收藏')
+      syncFavToCloud(t, added)
       break
     }
     case 'infothis': showInfo(t); break
@@ -1271,6 +1318,7 @@ renderQuarkState()
 if (state.account?.token) {
   loadCloudLists()
   syncCookieFromCloud()
+  syncFavsFromCloud()
 }
 
 // 开发期不注册 SW，避免反复改页面却看到旧缓存；生产域名才启用 PWA

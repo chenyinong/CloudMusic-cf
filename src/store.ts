@@ -1,5 +1,5 @@
 // D1 存储层：用户与歌单的增删查。
-import type { UserRow, PlaylistRow, UserSettingRow } from './types'
+import type { UserRow, PlaylistRow, UserSettingRow, FavoriteRow } from './types'
 
 export async function createUser(
   db: D1Database,
@@ -37,6 +37,7 @@ export async function listUsers(db: D1Database): Promise<Array<{ id: number; use
 export async function deleteUser(db: D1Database, id: number): Promise<void> {
   await db.prepare('DELETE FROM playlists WHERE user_id = ?').bind(id).run()
   await db.prepare('DELETE FROM user_settings WHERE user_id = ?').bind(id).run()
+  await db.prepare('DELETE FROM favorites WHERE user_id = ?').bind(id).run()
   await db.prepare('DELETE FROM users WHERE id = ?').bind(id).run()
 }
 
@@ -70,6 +71,44 @@ export async function saveUserSetting(
 
 export async function deleteUserSetting(db: D1Database, userId: number): Promise<void> {
   await db.prepare('DELETE FROM user_settings WHERE user_id = ?').bind(userId).run()
+}
+
+/* ── 收藏（小红心） ─────────────────────────────────────── */
+
+export async function listFavorites(db: D1Database, userId: number): Promise<FavoriteRow[]> {
+  const r = await db
+    .prepare('SELECT * FROM favorites WHERE user_id = ? ORDER BY updated_at DESC, id DESC')
+    .bind(userId)
+    .all()
+  return r.results as unknown as FavoriteRow[]
+}
+
+/** 收藏一首；已收藏则只更新歌曲信息，重新收藏会把墓碑清掉。 */
+export async function addFavorite(
+  db: D1Database,
+  userId: number,
+  key: string,
+  trackJson: string
+): Promise<void> {
+  const now = Date.now()
+  await db
+    .prepare(
+      'INSERT INTO favorites (user_id, "key", track, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 0) ON CONFLICT(user_id, "key") DO UPDATE SET track = excluded.track, updated_at = excluded.updated_at, deleted = 0'
+    )
+    .bind(userId, key, trackJson, now, now)
+    .run()
+}
+
+/** 取消收藏：软删除（留墓碑），这样别的设备不会把旧数据又同步回来。 */
+export async function removeFavorite(
+  db: D1Database,
+  userId: number,
+  key: string
+): Promise<void> {
+  await db
+    .prepare('UPDATE favorites SET deleted = 1, updated_at = ? WHERE user_id = ? AND "key" = ?')
+    .bind(Date.now(), userId, key)
+    .run()
 }
 
 export async function savePlaylist(

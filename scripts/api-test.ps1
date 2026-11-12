@@ -109,7 +109,36 @@ Check 'cookie DELETE 200' $r.ok ("code={0}" -f $r.code)
 $r = Req GET '/api/settings/quark' $null $ut
 Check 'cookie cleared' ($r.data.hasCookie -eq $false) ("body={0}" -f $r.raw)
 
-Write-Output '[10] cleanup test user'
+Write-Output '[10] favorites'
+$r = Req GET '/api/favorites' $null $null
+Check 'favorites GET without token -> 401' ($r.code -eq '401') ("code={0}" -f $r.code)
+$r = Req GET '/api/favorites' $null $ut
+$favList = @($r.data | Where-Object { $null -ne $_ })
+Check 'favorites GET empty' ($r.ok -and $favList.Count -eq 0) ("code={0} body={1}" -f $r.code, $r.raw)
+$favTrack = @{ key = 'netease:999'; title = 'FavSong'; artist = 'FA'; album = 'FB'; durationSec = 100; platform = 'netease'; platformId = '999' }
+$r = Req POST '/api/favorites' @{ key = $favTrack.key; track = $favTrack } $ut
+Check 'favorite add 200' $r.ok ("code={0} body={1}" -f $r.code, $r.raw)
+$r = Req GET '/api/favorites' $null $ut
+$favList = @($r.data | Where-Object { $null -ne $_ })
+Check 'favorite listed' ($favList.Count -eq 1 -and $favList[0].track.title -eq 'FavSong') ("body={0}" -f $r.raw)
+$r = Req POST '/api/favorites' @{ key = $favTrack.key; track = $favTrack } $ut
+Check 'favorite add idempotent' $r.ok ("code={0}" -f $r.code)
+$r = Req GET '/api/favorites' $null $ut
+$favList = @($r.data | Where-Object { $null -ne $_ })
+Check 'favorite still single' ($favList.Count -eq 1) ("count={0}" -f $favList.Count)
+$r = Req DELETE ('/api/favorites/' + [uri]::EscapeDataString($favTrack.key)) $null $ut
+Check 'favorite delete 200' $r.ok ("code={0}" -f $r.code)
+$r = Req GET '/api/favorites' $null $ut
+$favList = @($r.data | Where-Object { $null -ne $_ })
+$active = @($favList | Where-Object { -not $_.deleted })
+Check 'favorite soft-deleted (tombstone)' ($active.Count -eq 0 -and $favList.Count -eq 1) ("body={0}" -f $r.raw)
+$r = Req POST '/api/favorites' @{ key = $favTrack.key; track = $favTrack } $ut
+$r = Req GET '/api/favorites' $null $ut
+$favList = @($r.data | Where-Object { $null -ne $_ })
+$active = @($favList | Where-Object { -not $_.deleted })
+Check 'favorite revived after re-add' ($active.Count -eq 1) ("body={0}" -f $r.raw)
+
+Write-Output '[11] cleanup test user'
 $users = (Req GET '/api/admin/users' $null $admin).data
 $uid = ($users | Where-Object { $_.username -eq $user }).id
 $r = Req DELETE ("/api/admin/users/" + $uid) $null $admin
