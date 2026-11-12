@@ -18,8 +18,9 @@ const state = {
   detail: null,
   cookie: localStorage.getItem('cm.cookie') || '',
   index: -1,
-  busy: false,
   resolved: null,
+  /** 正在解析音源（解析期间界面先切歌，源标签显示「正在解析」） */
+  resolving: false,
   favs: loadJSON('cm.favs') || [],
   playMode: localStorage.getItem('cm.playMode') || 'order',
   onlineLyric: localStorage.getItem('cm.onlineLyric') !== 'off',
@@ -316,6 +317,7 @@ function renderAll() {
 function sourceLabel() {
   const r = state.resolved
   if (r && r.source) return { text: `${r.source} · ${r.partial ? '试听片段' : '完整版'}`, partial: !!r.partial }
+  if (state.resolving) return { text: '正在解析音源…', partial: false }
   if (state.cookie) return { text: '夸克 · 完整版', partial: false }
   return { text: '公开源 · 试听片段', partial: true }
 }
@@ -491,47 +493,158 @@ function setPlayIcon() {
   c.classList.toggle('paused', audio.paused)
 }
 
+/* ══════════ 音源解析缓存 + 预取 ══════════
+ * 点一首歌要等 /api/resolve 跑完（要搜源、探活、签发直链令牌），
+ * 切歌时干等体感最明显。三招提速：
+ *   1) 解析结果缓存到本机 —— 同一首再点直接播，不等网络
+ *   2) 当前歌开始播就预取相邻两首 —— 点下一首零等待
+ *   3) 连点时只认最后一次 —— 不再因为上一首还在解析就把新点击丢掉
+ */
+const RESOLVED_KEY = 'cm.resolved'
+const RESOLVED_MAX = 80
+const resolvedMemo = new Map()        // 会话内快速命中
+function resolvedKey(t) { return t?.key || (t?.title ? `${t.title}|${t.artist || ''}` : '') }
+function resolvedGet(t) {
+  const k = resolvedKey(t)
+  if (!k) return null
+  const m = resolvedMemo.get(k)
+  if (m) return m
+  try {
+    const all = loadJSON(RESOLVED_KEY) || {}
+    const one = all[k]
+    if (!one || !one.url) return null
+    if (one.exp && one.exp < Date.now()) { delete all[k]; saveJSON(RESOLVED_KEY, all); return null }
+    resolvedMemo.set(k, one)
+    return one
+  } catch { return null }
+}
+function resolvedPut(t, r) {
+  const k = resolvedKey(t)
+  if (!k || !r?.url) return
+  const one = {
+    url: r.url, source: r.source, partial: !!r.partial,
+    durationSec: r.durationSec, fileName: r.fileName,
+    exp: Date.now() + 80 * 60 * 1000,   // 服务端直链有效期 2 小时，这里留余量
+  }
+  resolvedMemo.set(k, one)
+  try {
+    const all = loadJSON(RESOLVED_KEY) || {}
+    all[k] = one
+    const ks = Object.keys(all)
+    if (ks.length > RESOLVED_MAX) for (const old of ks.slice(0, ks.length - RESOLVED_MAX)) delete all[old]
+    saveJSON(RESOLVED_KEY, all)
+  } catch { /* 配额满了就算了 */ }
+}
+function resolvedDrop(t) {
+  const k = resolvedKey(t)
+  if (!k) return
+  resolvedMemo.delete(k)
+  try {
+    const all = loadJSON(RESOLVED_KEY) || {}
+    delete all[k]
+    saveJSON(RESOLVED_KEY, all)
+  } catch { /* 忽略 */ }
+}
+
 /* ══════════ 播放 ══════════ */
 function setPlaylist(pl, idx) {
   state.playlist = pl
   saveJSON('cm.playlist', pl)
   playAt(idx)
 }
+let playToken = 0            // 连点时只认最后一次
+const prefetching = new Set()  // 正在预取的歌（防止同一首重复预取）
 async function playAt(i) {
   const pl = state.playlist
-  if (!pl || !pl.tracks[i] || state.busy) return
-  state.busy = true
+  if (!pl || !pl.tracks[i]) return
+  const t = pl.tracks[i]
+  const token = ++playToken
   state.index = i
   state.resolved = null
-  toast('正在找完整版…')
+  state.resolving = true
+  // 界面立刻切到新歌（标题/封面/歌词同时开始加载），别让用户盯着上一首干等解析
+  onTrackChanged(t)
   renderLibrary()
   renderMini()
+  try {
+    // 有缓存：不等网络，直接起播
+    const cached = resolvedGet(t)
+    if (cached) {
+      startResolved(i, t, cached, true)
+    } else {
+      toast('正在找完整版…')
+      const d = await post('/api/resolve', {
+        title: t.title, artist: t.artist, durationSec: t.durationSec,
+        platformId: t.platformId, cookie: state.cookie,
+      })
+      if (token !== playToken) return          // 已经点了别的歌，这次结果作废
+      if (!d.ok || !d.resolved) { toast(d.error || '没找到可播放的音源'); return }
+      resolvedPut(t, d.resolved)
+      startResolved(i, t, d.resolved, false)
+    }
+  } catch (e) {
+    if (token !== playToken) return
+    toast('解析失败：' + e.message)
+  } finally {
+    if (token === playToken) {
+      state.resolving = false
+      renderLibrary()
+      renderMini()
+      renderSourceInfo()
+      prefetchNeighbors()
+    }
+  }
+}
+/** 拿到音源后起播 */
+function startResolved(i, t, resolved, fromCache) {
+  state.resolved = resolved
+  const myToken = playToken
+  audio.src = resolved.url
+  audio.play().catch((e) => {
+    const name = String(e?.name || '')
+    const msg = String(e?.message || '')
+    // 切歌时旧音频的 play() 会被新 src 打断，抛的是 AbortError —— 这不是错误，直接忽略
+    if (/Abort/i.test(name + msg)) return
+    // 已经切到别的歌了，这次的失败不用管
+    if (myToken !== playToken) return
+    if (/NotAllowed/i.test(name + msg)) { $('#tap-to-play').hidden = false; return }
+    if (fromCache) {
+      // 缓存的直链可能已经失效：清掉重新解析一次
+      resolvedDrop(t)
+      toast('直链失效，正在重新解析…')
+      setTimeout(() => playAt(i), 60)
+      return
+    }
+    toast('播放失败：' + (e.message || '直链可能已失效'))
+  })
+  if (!fromCache) toast(resolved.partial ? '只有试听片段，建议登录夸克' : '正在播放完整版')
+  updateMediaSession(t)
+  renderSourceInfo()
+}
+/**
+ * 提前把上一首/下一首解析好，用户点「下一首」或返回上一首时不用等。
+ * 只预取相邻两首，既够用又不会把服务器打爆。
+ */
+function prefetchNeighbors() {
+  prefetchOne(nextIndex(1))
+  prefetchOne(nextIndex(-1))
+}
+/** 预取一首歌的音源（已经在缓存里 / 已在预取就跳过） */
+async function prefetchOne(i) {
+  const pl = state.playlist
+  if (i < 0 || !pl?.tracks?.[i]) return
   const t = pl.tracks[i]
+  const k = resolvedKey(t)
+  if (!k || resolvedGet(t) || prefetching.has(k)) return
+  prefetching.add(k)
   try {
     const d = await post('/api/resolve', {
       title: t.title, artist: t.artist, durationSec: t.durationSec,
       platformId: t.platformId, cookie: state.cookie,
     })
-    if (!d.ok || !d.resolved) { toast(d.error || '没找到可播放的音源'); return }
-    state.resolved = d.resolved
-    onTrackChanged(t)
-    audio.src = d.resolved.url
-    try {
-      await audio.play()
-    } catch (e) {
-      if (/NotAllowed/i.test(String(e?.name || e))) $('#tap-to-play').hidden = false
-      else toast('播放失败：' + (e.message || '直链可能已失效'))
-    }
-    toast(d.resolved.partial ? '只有试听片段，建议登录夸克' : '正在播放完整版')
-    updateMediaSession(t)
-    renderSourceInfo()
-  } catch (e) {
-    toast('解析失败：' + e.message)
-  } finally {
-    state.busy = false
-    renderLibrary()
-    renderMini()
-  }
+    if (d.ok && d.resolved) resolvedPut(t, d.resolved)
+  } catch { /* 预取失败无所谓，真播的时候再解析 */ }
+  prefetching.delete(k)
 }
 function onTrackChanged(t) {
   lyricLines = []
@@ -541,15 +654,21 @@ function onTrackChanged(t) {
   syncPlayer()
   if (ppView === 'lyric') ensureLyric()
 }
-function step(delta) {
+/** 下一首的下标（按播放模式）；切歌和预取共用 */
+function nextIndex(delta) {
   const n = state.playlist?.tracks?.length ?? 0
-  if (!n) return
-  let next
-  if (state.playMode === 'repeat1') next = (state.index + delta + n) % n
-  else if (state.playMode === 'shuffle') {
-    next = state.index
+  if (!n) return -1
+  if (state.playMode === 'repeat1') return (state.index + delta + n) % n
+  if (state.playMode === 'shuffle') {
+    let next = state.index
     if (n > 1) while (next === state.index) next = Math.floor(Math.random() * n)
-  } else next = (state.index + delta + n) % n
+    return next
+  }
+  return (state.index + delta + n) % n
+}
+function step(delta) {
+  const next = nextIndex(delta)
+  if (next < 0) return
   playAt(next)
 }
 function updateMediaSession(t) {
