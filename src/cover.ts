@@ -176,3 +176,44 @@ export async function fetchCover(q: CoverQuery): Promise<CoverResult> {
   if (loose) return { url: loose.hit.url, source: 'loose', strict: false }
   return { url: null, source: 'none', strict: false }
 }
+
+/**
+ * 给上传的歌单补封面 —— 只补第一首歌。
+ *
+ * 歌单封面 = 第一首歌的封面（网页版 `CoverArt.firstCover` 一个口径）。
+ * 上传的歌单里通常**没有** coverUrl 字段（安卓上传的就没有），
+ * 不补的话列表接口取到的封面是空的，两边显示就都不对。
+ *
+ * 已经有封面就原样返回，不额外发请求。
+ */
+export async function ensureFirstCover(tracks: unknown[]): Promise<unknown[]> {
+  // 找到第一首真正的歌（数组里理论上都是对象，但别为脏数据崩了）
+  let idx = -1
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i]
+    if (t && typeof t === 'object' && !Array.isArray(t)) {
+      idx = i
+      break
+    }
+  }
+  if (idx < 0) return tracks
+  const first = tracks[idx] as Record<string, unknown>
+  // 整张单里只要有一首带封面就够了（列表接口会往后找第一张有封面的）
+  const anyCover = tracks.some(
+    (t) =>
+      !!t &&
+      typeof t === 'object' &&
+      String((t as Record<string, unknown>).coverUrl ?? '').trim() !== ''
+  )
+  if (anyCover) return tracks
+
+  const c = await fetchCover({
+    title: String(first.title ?? ''),
+    artist: String(first.artist ?? ''),
+    album: String(first.album ?? ''),
+  })
+  if (!c.url) return tracks
+  return tracks.map((t, i) =>
+    i === idx ? { ...(t as Record<string, unknown>), coverUrl: c.url } : t
+  )
+}

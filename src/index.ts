@@ -3,7 +3,7 @@ import { fetchPlaylist, resolveRef } from './playlist'
 import { searchMulti } from './search'
 import { pollLogin, startLogin } from './quark-login'
 import { verifyQuarkCookie } from './quark'
-import { fetchCover } from './cover'
+import { fetchCover, ensureFirstCover } from './cover'
 import { qrSvg } from './qr'
 import { resolveTrack } from './sources'
 import { fetchLyric } from './lyric'
@@ -263,7 +263,11 @@ export default {
       if (!Array.isArray(tracks)) return json({ error: 'tracks 必须是数组' }, 400)
       const name = (b.name ?? '我的歌单').trim() || '我的歌单'
       const platform = (b.platform ?? 'netease').trim() || 'netease'
-      const id = await savePlaylist(env.DB, uid, name, platform, JSON.stringify(tracks))
+      // 封面口径跟网页版一致：歌单封面 = 第一首歌的封面。
+      // 上传的歌单通常不带封面字段（安卓上传的就没有），补上之后
+      // 列表接口和网页版才都取得到同一个封面。
+      const withCover = await ensureFirstCover(tracks)
+      const id = await savePlaylist(env.DB, uid, name, platform, JSON.stringify(withCover))
       return json({ id, name, platform })
     }
     if (url.pathname.startsWith('/api/playlists/') && request.method === 'GET') {
