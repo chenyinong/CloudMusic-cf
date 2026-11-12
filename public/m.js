@@ -33,7 +33,11 @@ let ppOpen = false
 let ppView = 'cover'
 let sheetTrack = null
 const coverObservers = []
-const coverCache = new Map()
+const coverCache = new Map()       // 会话内 Promise 去重（同一首歌并发只查一次）
+const COVER_NEG_TTL = 7 * 24 * 3600 * 1000  // 负缓存 7 天，同安卓
+const COVER_POS_TTL = 30 * 24 * 3600 * 1000 // 命中结果保留 30 天
+function coverStore() { return loadJSON('cm.covers') || {} }
+function saveCoverStore(s) { saveJSON('cm.covers', s) }
 
 function loadJSON(k) { try { return JSON.parse(localStorage.getItem(k) || 'null') } catch { return null } }
 function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)) }
@@ -65,15 +69,15 @@ async function post(path, body) {
 }
 function current() { return state.playlist?.tracks?.[state.index] || null }
 function coverKey(t) { return `${t?.title || ''}|${t?.artist || ''}` }
-function hue(s) {
-  let h = 0
-  for (const c of String(s || 'music')) h = (h * 31 + c.charCodeAt(0)) % 360
-  return h
+/** 同专辑判定：歌手 + 专辑（安卓是 provider+歌手+目录，网页版没有网盘维度） */
+function albumKey(t) {
+  const a = String(t?.artist || '').trim().toLowerCase()
+  const b = String(t?.album || '').trim().toLowerCase()
+  return a && b ? `${a}|${b}` : ''
 }
-function grad(t) {
-  const h = hue(t?.title)
-  return `linear-gradient(145deg, hsl(${h} 42% 52%), hsl(${(h + 45) % 360} 38% 34%))`
-}
+function hue(s) { return CoverArt.theme(s).h }
+/** 占位画：与安卓 GeneratedCover 同一张「天空 + 圆日 + 三层山影」 */
+function placeholder(t) { return CoverArt.generated(t?.title || '?') }
 
 /* ══════════ iOS Safari 音频解锁 ══════════
    iPhone 上 play() 必须在用户手势的同步调用栈里；我们的 playAt 要等
@@ -119,17 +123,66 @@ function applyTheme() {
   if (meta) meta.content = dark ? '#121212' : '#F5F6F8'
 }
 
-/* ══════════ 封面 ══════════ */
-async function getCover(t) {
-  if (!t) return null
-  const k = coverKey(t)
-  if (!coverCache.has(k)) {
-    coverCache.set(k, post('/api/cover', { title: t.title, artist: t.artist })
-      .then((d) => d.url || null).catch(() => null))
-  }
-  return coverCache.get(k)
+/* ══════════ 封面 ══════════
+   对齐安卓 CoverRepository：元数据封面 → 持久化缓存 → 同专辑复用 → 后端来源链。
+   命中/查无都落 localStorage，同一首歌终身只查一次；查无 7 天后允许重试。 */
+function cachedCover(k) {
+  const rec = coverStore()[k]
+  if (!rec) return undefined
+  const ttl = rec.url ? COVER_POS_TTL : COVER_NEG_TTL
+  if (Date.now() - (rec.at || 0) > ttl) return undefined
+  return rec.url || null
 }
-function fillCover(el, t, letter) {
+function storeCover(t, url, strict) {
+  const s = coverStore()
+  s[coverKey(t)] = { url: url || '', at: Date.now() }
+  // 严格命中才可复用给同专辑其他歌，避免把宽松候选贴满整张专辑
+  if (url && strict && albumKey(t)) s['@album:' + albumKey(t)] = { url, at: Date.now() }
+  try { saveCoverStore(s) } catch { /* localStorage 满时忽略 */ }
+}
+function resolveCover(t) {
+  const k = coverKey(t)
+  if (coverCache.has(k)) return coverCache.get(k)
+  const p = (async () => {
+    // 1) 歌单/搜索元数据自带的封面，最准、零成本
+    if (t.coverUrl) { storeCover(t, t.coverUrl, true); return t.coverUrl }
+    // 2) 持久化缓存（含负缓存）
+    const hit = cachedCover(k)
+    if (hit !== undefined) return hit
+    // 3) 同专辑复用
+    const ak = albumKey(t)
+    const reused = ak ? cachedCover('@album:' + ak) : undefined
+    if (reused) { storeCover(t, reused, true); return reused }
+    // 4) 后端来源链
+    try {
+      const d = await post('/api/cover', {
+        title: t.title, artist: t.artist, album: t.album, coverUrl: t.coverUrl,
+      })
+      const url = d.url || null
+      storeCover(t, url, !!d.strict)
+      return url
+    } catch {
+      // 网络异常是临时失败，不落负缓存，下次还能重试
+      return null
+    }
+  })()
+  coverCache.set(k, p)
+  return p
+}
+async function getCover(t) { return t ? resolveCover(t) : null }
+function paintPlaceholder(el, t) {
+  el.style.backgroundImage = `url("${placeholder(t)}")`
+  el.style.backgroundSize = 'cover'
+  el.style.backgroundPosition = 'center'
+  const ph = el.querySelector('.cover-letter')
+  if (ph) ph.hidden = true
+}
+function paintRealCover(el, t, url, k) {
+  if (url && el.isConnected && el.dataset.ck === k && !el.querySelector('img')) {
+    el.insertAdjacentHTML('afterbegin', `<img src="${esc(CoverArt.proxied(url))}" alt="" />`)
+  }
+}
+function fillCover(el, t) {
   if (!el) return
   const k = coverKey(t)
   // 同一首歌重复调用（play/pause）直接跳过，避免删了又加导致封面闪一下
@@ -138,21 +191,8 @@ function fillCover(el, t, letter) {
   el.dataset.coverInit = '1'
   const old = el.querySelector('img')
   if (old) old.remove()
-  let ph = el.querySelector('.cover-letter')
-  if (!ph) {
-    ph = document.createElement('span')
-    ph.className = 'cover-letter'
-    el.appendChild(ph)
-  }
-  ph.textContent = letter || (t ? (t.title || '♪').charAt(0) : '♪')
-  ph.hidden = false
-  el.style.background = grad(t)
-  getCover(t).then((url) => {
-    if (url && el.isConnected && el.dataset.ck === k && !el.querySelector('img')) {
-      ph.hidden = true
-      el.insertAdjacentHTML('afterbegin', `<img src="${esc(url)}" alt="" />`)
-    }
-  })
+  paintPlaceholder(el, t)
+  getCover(t).then((url) => paintRealCover(el, t, url, k))
 }
 function observeCovers(root, tracks) {
   // 同一个容器重渲染时先释放旧 observer；不同容器各自独立，切 tab 互不影响
@@ -166,11 +206,7 @@ function observeCovers(root, tracks) {
     // 列表只画占位，不立刻发请求；封面等进入视口再取，避免一次上百个请求
     const old = el.querySelector('img')
     if (old) old.remove()
-    let ph = el.querySelector('.cover-letter')
-    if (!ph) { ph = document.createElement('span'); ph.className = 'cover-letter'; el.appendChild(ph) }
-    ph.textContent = (t.title || '♪').charAt(0)
-    ph.hidden = false
-    el.style.background = grad(t)
+    paintPlaceholder(el, t)
   })
   if (!('IntersectionObserver' in window)) return
   const io = new IntersectionObserver((entries) => {
@@ -179,13 +215,7 @@ function observeCovers(root, tracks) {
       const el = e.target
       const t = tracks[Number(el.dataset.i)]
       if (t && !el.querySelector('img')) {
-        getCover(t).then((url) => {
-          if (url && el.isConnected && coverKey(t) === el.dataset.ck) {
-            const ph = el.querySelector('.cover-letter')
-            if (ph) ph.hidden = true
-            el.insertAdjacentHTML('afterbegin', `<img src="${esc(url)}" alt="" />`)
-          }
-        })
+        getCover(t).then((url) => paintRealCover(el, t, url, coverKey(t)))
       }
       io.unobserve(el)
     }
@@ -453,6 +483,27 @@ function setView(v, instant) {
   $$('.pp-dot').forEach((d) => d.classList.toggle('active', d.dataset.view === v))
   if (v === 'lyric') ensureLyric()
 }
+/** 播放页氛围底：三层叠加（表面色 → 淡彩渐变 → 白色渐隐蒙版），同安卓 songAmbientBackground */
+function setAmbientHue(h) {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark'
+  const s = dark ? '28,28,30' : '255,255,255'
+  $('#pp-bg').style.background =
+    `linear-gradient(180deg, rgba(${s},.80) 0%, rgba(${s},.40) 45%, rgba(${s},0) 100%),` +
+    `linear-gradient(180deg, hsla(${h},42%,52%,.20) 0%, hsla(${h},42%,52%,.32) 50%, ` +
+    `hsla(${(h + 25) % 360},40%,48%,.44) 100%), var(--surface)`
+}
+/** 有真封面就从位图提主色；跨域取色失败或黑白封面则保持歌名调色板（安卓同款回落） */
+function applyAmbient(t) {
+  const fallback = hue(t?.title)
+  setAmbientHue(fallback)
+  if (!t) return
+  getCover(t).then((url) => {
+    if (!url || current() !== t) return
+    CoverArt.extractTheme(CoverArt.proxied(url), (h) => {
+      if (h !== null && current() === t) setAmbientHue(h)
+    })
+  })
+}
 function syncPlayer() {
   const t = current()
   const r = state.resolved
@@ -464,9 +515,7 @@ function syncPlayer() {
   $('#pp-index').textContent = n ? `${String(state.index + 1).padStart(2, '0')} / ${String(n).padStart(2, '0')}` : ''
   const cover = $('#pp-cover')
   fillCover(cover, t)
-  const h = hue(t?.title)
-  $('#pp-bg').style.background =
-    `linear-gradient(180deg, hsla(${h},38%,52%,.12), hsla(${h},38%,48%,.26) 42%, hsla(${(h + 30) % 360},40%,52%,.62))`
+  applyAmbient(t)
   $('#pp-fav').classList.toggle('on', isFav(t))
   $('#pp-mode').innerHTML = modeIcon(state.playMode)
   setPlayIcon()

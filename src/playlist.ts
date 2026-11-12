@@ -10,6 +10,19 @@ const QQ_HOST = 'https://u.y.qq.com'
 const QQ_REFERER = 'https://i2.y.qq.com/n3/other/pages/details/playlist.html'
 const NE_HEADERS = { 'User-Agent': UA_NETEASE, Referer: `${NETEASE}/` }
 const QQ_HEADERS = { 'User-Agent': UA_QQ, Referer: QQ_REFERER }
+/** QQ 专辑封面：拿 albummid 直接拼，跟安卓客户端一致 */
+const QQ_ARTWORK = 'https://y.gtimg.cn/music/photo_new/T002R500x500M000%s.jpg'
+
+/** 把接口给的封面地址规整成 https 直链；空值返回空串 */
+function normalizeCover(u: unknown): string {
+  const s = String(u ?? '').trim()
+  if (!s) return ''
+  return https(s.startsWith('http') ? s : `https://${s}`)
+}
+function qqCover(mid: unknown): string {
+  const m = String(mid ?? '').trim()
+  return m ? QQ_ARTWORK.replace('%s', m) : ''
+}
 
 export interface Ref {
   platform: Platform
@@ -110,6 +123,7 @@ async function fetchNetease(id: string): Promise<ImportedPlaylist> {
         durationSec: Math.round(Number(s.duration ?? 0) / 1000),
         platform: 'netease',
         platformId: String(sid),
+        coverUrl: normalizeCover(s.album?.picUrl),
       })
     }
   }
@@ -172,6 +186,7 @@ async function fetchQQ(disstid: string): Promise<ImportedPlaylist> {
         durationSec: Number(s.interval ?? 0),
         platform: 'qq',
         platformId: mid,
+        coverUrl: qqCover(s.album?.mid || s.album?.pmid || s.albummid),
       })
     }
     begin += list.length
@@ -191,6 +206,23 @@ export async function searchTracks(keyword: string): Promise<Track[]> {
     NE_HEADERS
   ).catch(() => null)
   const songs: any[] = d?.result?.songs ?? []
+  if (!songs.length) return []
+
+  // 搜索结果只给 album.picId，没有可直接用的封面地址；
+  // 一次批量 song/detail 把整批封面补齐，避免每首歌各自再查一次。
+  const ids = songs.map((s) => Number(s.id)).filter((x) => x > 0)
+  const picById = new Map<number, string>()
+  if (ids.length) {
+    const detail = await getJson<any>(
+      `${NETEASE}/api/song/detail/?ids=${enc(JSON.stringify(ids))}`,
+      NE_HEADERS
+    ).catch(() => null)
+    for (const x of detail?.songs ?? []) {
+      const u = normalizeCover(x.album?.picUrl)
+      if (u) picById.set(Number(x.id), u)
+    }
+  }
+
   return songs
     .map((s) => ({
       key: `netease:${s.id}`,
@@ -200,6 +232,7 @@ export async function searchTracks(keyword: string): Promise<Track[]> {
       durationSec: Math.round(Number(s.duration ?? 0) / 1000),
       platform: 'netease' as const,
       platformId: String(s.id),
+      coverUrl: picById.get(Number(s.id)) ?? '',
     }))
     .filter((t) => t.title)
 }

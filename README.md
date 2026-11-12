@@ -45,7 +45,7 @@ Cloudflare Workers + PWA 版「云音乐」。导入 QQ 音乐 / 网易云歌单
 - **主题**：跟随系统 / 浅色 / 深色。
 - **在线歌词开关**：关闭后不请求歌词接口。
 - **夸克扫码登录** + 手动粘贴 Cookie。
-- 歌曲封面走 iTunes 公开接口查真封面，查不到时回落到按歌名生成的渐变色块。
+- 歌曲封面走「歌单元数据 → QQ 音乐 → iTunes US」来源链，严格匹配歌名歌手；查不到时画安卓同款程序化占位图（渐变天空 + 圆日 + 三层山影）。
 - PWA：可「添加到主屏幕」独立运行，含 iOS 主屏图标、状态栏主题色、安全区适配与离线静态资源缓存（Service Worker 缓存版本 `cloudmusic-cf-v3`）。
 
 ### 移动端（iPhone）特别处理
@@ -105,6 +105,7 @@ Worker 无状态，登录过程的 `_UP_*` 会话 Cookie 和 token 用 AES-GCM �
 | `cm.cookie` | 夸克 Cookie |
 | `cm.favs` | 收藏的歌曲 |
 | `cm.playMode` / `cm.lyricOffset` | 播放模式 / 歌词偏移 |
+| `cm.covers` | 封面地址缓存（含负缓存与同专辑复用，带时间戳） |
 | `cm.onlineLyric` / `cm.theme` | 在线歌词开关 / 主题 |
 | `cm.loggedIn` | 移动版是否已通过登录页 |
 | `cm.desktop`（sessionStorage） | 豁免手机自动跳转 |
@@ -123,7 +124,7 @@ src/
   quark.ts        夸克分享链接转直链
   quark-login.ts  扫码登录 CAS 流程
   lyric.ts        歌词：来源 id 直取 + 酷狗 / 网易云搜索兜底
-  cover.ts        iTunes 专辑封面
+  cover.ts        封面来源链：元数据 → QQ → iTunes US，含歌名清洗与严格匹配打分
   qr.ts           二维码 SVG 生成
   match.ts        歌名 / 歌手匹配
   util.ts         HTTP、AES-GCM 封印、Cookie 合并等工具
@@ -150,7 +151,8 @@ wrangler.toml     Workers 配置
 | `POST /api/search` | `{ keyword }` | `{ tracks }`，可直接点播的曲目列表 |
 | `POST /api/resolve` | `{ title, artist, durationSec, platformId?, cookie? }` | `{ ok, resolved?, notes, error? }`；`resolved` 含 `url` / `source` / `partial` / `fileName` |
 | `POST /api/lyric` | `{ title, artist, platform?, platformId? }` | `{ lyric, source?, error? }`，LRC 文本 |
-| `POST /api/cover` | `{ title, artist }` | `{ url }`，iTunes 封面（无结果时为 `null`） |
+| `POST /api/cover` | `{ title, artist, album?, coverUrl? }` | `{ url, source, strict }`；`source` 为 `metadata` / `qq` / `itunes` / `loose` / `none` |
+| `GET /api/cover-img?u=` | 封面原图地址（CDN 白名单） | 同源代理图片，供 canvas 取色与规避防盗链 |
 | `GET /api/stream?t=` | 加密令牌 | 带 Cookie / Referer / UA 的流式代理，透传 Range |
 
 `/api/resolve` 的 Cookie 也可通过 `X-Quark-Cookie` 请求头或服务端 `QUARK_COOKIE` secret 提供。夸克 CDN 返回 412（Cookie / `__puus` 不匹配）时，流式代理会带上 `X-Cloudmusic-Error: quark-412`，提示前端去刷新登录态。
@@ -159,7 +161,15 @@ wrangler.toml     Workers 配置
 
 - **音源**：夸克（下歌吧）→ 网易云 → 酷我。每条候选都先探活；按文件大小 / 时长判断是否为试听片段，是则记下来继续找完整版，全部只有片段才用第一个兜底。
 - **歌词**：优先用歌单自带的来源歌曲 id 直取（QQ `fcg_query_lyric.fcg`、网易云 `/api/song/lyric`），失败再用酷狗搜索（对歌名 + 歌手打分，匹配不上宁可不返回，避免错歌歌词），最后网易云搜索兜底。
-- **封面**：iTunes 公开搜索接口，命中的第一张 artwork 放大到 600×600；查不到时用按歌名生成的渐变色块 + 首字占位。
+- **封面**（对齐安卓 `CoverRepository`，按出图速度命中即止）：
+  1. **歌单/搜索元数据**：网易云 `album.picUrl`、QQ `album.mid` 拼 `y.gtimg.cn` 500×500 —— 零成本、最准，绝大多数歌到这步就结束。
+  2. **持久化缓存**：命中结果存 `cm.covers` 30 天，「查过但没有」负缓存 7 天；**同专辑**（歌手 + 专辑）严格命中过的封面直接复用给同专辑其他歌。
+  3. **QQ 音乐搜索**：`albummid` 拼封面，中文曲库大、响应快。
+  4. **iTunes US 兜底**：只试前两个关键词（`country=CN` 对中文歌几乎全空，安卓也明确不查 CN）。
+  5. **程序化占位画**：安卓 `GeneratedCover` 同款——按歌名哈希从 6 组调色板里选一组，画渐变天空 + 圆日 + 三层山影；列表小图和播放页大卡共用同一张画。
+
+  匹配口径与安卓一致：歌名相同 10 分 / 包含 6 分，歌手相同 +8 / 包含 +5，≥10 为严格命中；6~9 分且歌手对得上先记为候选，所有来源落空才用，避免同名翻唱张冠李戴。关键词会先洗掉 `(Live)`、`(苏打绿版)` 这类括号后缀再试。
+  真封面统一走 `/api/cover-img` 同源代理（CDN 白名单），浏览器 canvas 才能取色：播放页氛围底从封面位图提主色，黑白封面或取色失败时回落到歌名调色板——与安卓 `extractCoverPalette` 的回落行为一致。
 
 ---
 
@@ -169,5 +179,6 @@ wrangler.toml     Workers 配置
 - `*.workers.dev` 在中国大陆可能访问不稳；部署后先开 `/api/health` 测连通性，必要时绑自定义域名。
 - 夸克直链是会话绑定的：签发时刷新的 `__puus` 必须跟着这条直链走，否则 CDN 返回 412；Cookie 过期就重新扫码登录。
 - iOS Safari 的自动播放策略较严格，已做静音解锁 + 「点此开始播放」兜底；后台 / 锁屏连续播放仍受系统与浏览器策略影响，建议真机验证。
-- iTunes 封面按歌名 + 歌手检索，可能与原专辑封面不一致。
-- 搜索点歌目前只走网易云搜索；封面结果只在当前会话内缓存（`coverCache`），刷新页面会重新查 iTunes。播放模式、歌词偏移、主题、收藏等设置则持久化在 `localStorage`。
+- 没有歌单元数据的老歌单，封面靠 QQ / iTunes 在线检索，可能与原专辑封面不完全一致；入库后即缓存，不会重复查。
+- 安卓的「网盘同目录封面图」「音频文件内嵌封面（ID3/FLAC）」两档是网盘播放器专属，网页版无对应数据来源，未实现。
+- 搜索点歌目前只走网易云搜索；播放模式、歌词偏移、主题、收藏、封面结果都持久化在 `localStorage`，只有本会话内的并发去重表（`coverCache`）不落盘。

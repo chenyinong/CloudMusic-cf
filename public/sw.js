@@ -1,6 +1,6 @@
-const CACHE = 'cloudmusic-cf-v3'
+const CACHE = 'cloudmusic-cf-v4'
 const PRECACHE = [
-  '/', '/app.js', '/style.css',
+  '/', '/app.js', '/style.css', '/cover.js',
   '/m.html', '/m.css', '/m.js',
   '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/manifest.webmanifest',
 ]

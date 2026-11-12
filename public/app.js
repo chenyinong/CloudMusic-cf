@@ -82,7 +82,7 @@ function renderList() {
     `${pl.platform === 'qq' ? 'QQ 音乐' : '网易云'} · ${pl.tracks.length} 首`
   root.innerHTML = pl.tracks.map((t, i) => `
     <div class="track ${i === state.index ? 'active' : ''}" data-i="${i}">
-      <div class="idx">${i === state.index ? '♪' : i + 1}</div>
+      <div class="track-cover" data-i="${i}"></div>
       <div>
         <div class="title">${esc(t.title)}</div>
         <div class="sub">${esc(t.artist || '未知歌手')}${t.album ? ' · ' + esc(t.album) : ''}</div>
@@ -92,6 +92,38 @@ function renderList() {
   root.querySelectorAll('.track').forEach((el) =>
     el.addEventListener('click', () => playAt(Number(el.dataset.i)))
   )
+  observeTrackCovers(root, pl.tracks)
+}
+/** 列表封面：先画安卓同款占位画，进入视口才取真图 */
+let trackCoverObserver = null
+function observeTrackCovers(root, tracks) {
+  if (trackCoverObserver) trackCoverObserver.disconnect()
+  const els = root.querySelectorAll('.track-cover')
+  els.forEach((el) => {
+    const t = tracks[Number(el.dataset.i)]
+    if (!t) return
+    el.style.backgroundImage = `url("${CoverArt.generated(t.title)}")`
+    el.style.backgroundSize = 'cover'
+    el.style.backgroundPosition = 'center'
+  })
+  if (!('IntersectionObserver' in window)) return
+  trackCoverObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue
+      const el = e.target
+      const t = tracks[Number(el.dataset.i)]
+      if (t && !el.dataset.loaded) {
+        el.dataset.loaded = '1'
+        resolveCover(t).then((url) => {
+          if (url && el.isConnected) {
+            el.style.backgroundImage = `url("${CoverArt.proxied(url)}")`
+          }
+        })
+      }
+      trackCoverObserver.unobserve(el)
+    }
+  }, { rootMargin: '160px' })
+  els.forEach((el) => trackCoverObserver.observe(el))
 }
 
 function renderPlayer() {
@@ -164,29 +196,67 @@ async function loadLyric(track) {
   }
 }
 
+/* 封面：元数据 → 持久化缓存（含 7 天负缓存）→ 同专辑复用 → 后端来源链 */
+const coverInflight = new Map()
+const COVER_NEG_TTL = 7 * 24 * 3600 * 1000
+const COVER_POS_TTL = 30 * 24 * 3600 * 1000
+function coverStore() { return loadJSON('cm.covers') || {} }
+function coverKey(t) { return `${t?.title || ''}|${t?.artist || ''}` }
+function albumKey(t) {
+  const a = String(t?.artist || '').trim().toLowerCase()
+  const b = String(t?.album || '').trim().toLowerCase()
+  return a && b ? `${a}|${b}` : ''
+}
+function cachedCover(k) {
+  const rec = coverStore()[k]
+  if (!rec) return undefined
+  if (Date.now() - (rec.at || 0) > (rec.url ? COVER_POS_TTL : COVER_NEG_TTL)) return undefined
+  return rec.url || null
+}
+function storeCover(t, url, strict) {
+  const s = coverStore()
+  s[coverKey(t)] = { url: url || '', at: Date.now() }
+  if (url && strict && albumKey(t)) s['@album:' + albumKey(t)] = { url, at: Date.now() }
+  try { saveJSON('cm.covers', s) } catch { /* 容量满忽略 */ }
+}
+function resolveCover(t) {
+  const k = coverKey(t)
+  if (coverInflight.has(k)) return coverInflight.get(k)
+  const p = (async () => {
+    if (t.coverUrl) { storeCover(t, t.coverUrl, true); return t.coverUrl }
+    const hit = cachedCover(k)
+    if (hit !== undefined) return hit
+    const ak = albumKey(t)
+    const reused = ak ? cachedCover('@album:' + ak) : undefined
+    if (reused) { storeCover(t, reused, true); return reused }
+    try {
+      const d = await post('/api/cover', {
+        title: t.title, artist: t.artist, album: t.album, coverUrl: t.coverUrl,
+      })
+      const url = d.url || null
+      storeCover(t, url, !!d.strict)
+      return url
+    } catch { return null }
+  })()
+  coverInflight.set(k, p)
+  return p
+}
 async function loadCover(track) {
   const art = $('#pp-art')
   const letter = $('#pp-letter')
-  letter.style.display = ''
-  art.style.backgroundImage = ''
+  letter.style.display = 'none'
+  art.style.backgroundImage = `url("${CoverArt.generated(track?.title || '?')}")`
+  art.style.backgroundSize = 'cover'
+  art.style.backgroundPosition = 'center'
   if (!track) return
-  try {
-    const d = await post('/api/cover', { title: track.title, artist: track.artist })
-    if (d.url) {
-      art.style.backgroundImage = `url("${d.url}")`
-      art.style.backgroundSize = 'cover'
-      art.style.backgroundPosition = 'center'
-      letter.style.display = 'none'
-    }
-  } catch { /* 封面拿不到就用色块 */ }
+  const url = await resolveCover(track)
+  if (url && state.playlist?.tracks?.[state.index] === track) {
+    art.style.backgroundImage = `url("${CoverArt.proxied(url)}")`
+  }
 }
 
 // ── 全屏播放页 ───────────────────────────────────────
-function coverHue(str) {
-  let h = 0
-  for (const c of String(str || 'music')) h = (h * 31 + c.charCodeAt(0)) % 360
-  return h
-}
+function coverHue(str) { return CoverArt.theme(str).h }
 function openPlayerPage() {
   if (state.index < 0) return
   ppOpen = true
@@ -217,9 +287,8 @@ function syncPlayerPage() {
   const h = coverHue(t ? t.title : 'music')
   $('#pp-bg').style.background =
     `linear-gradient(180deg, hsl(${h} 55% 32% / .35), hsl(${(h + 40) % 360} 55% 22% / .95))`
-  $('#pp-art').style.background =
-    `linear-gradient(145deg, hsl(${h} 60% 55%), hsl(${(h + 50) % 360} 60% 40%))`
-  $('#pp-letter').textContent = t ? (t.title || '♪').charAt(0) : '♪'
+  // 封面图由 loadCover 负责；这里不能再用 background 简写覆盖它
+  $('#pp-letter').style.display = 'none'
   $('#pp-toggle').textContent = audio.paused ? '▶' : '❚❚'
   $('#pp-mode').textContent = MODE[state.playMode].icon
   $('#pp-mode').title = `播放模式：${MODE[state.playMode].label}`

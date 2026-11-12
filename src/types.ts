@@ -14,6 +14,8 @@ export interface Track {
   durationSec: number
   platform: Platform
   platformId?: string
+  /** 歌单/搜索接口自带的专辑封面，最准，优先于在线检索 */
+  coverUrl?: string
 }
 
 export interface ImportedPlaylist {

@@ -85,9 +85,13 @@ button.primary:disabled { opacity: .5; cursor: default; }
 
 .tracks { margin-top: 6px; }
 .track {
-  display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 12px;
-  padding: 11px 8px; border-radius: 12px; cursor: pointer;
+  display: grid; grid-template-columns: 46px 1fr auto; align-items: center; gap: 12px;
+  padding: 8px; border-radius: 12px; cursor: pointer;
   border-bottom: 1px solid rgba(255, 255, 255, .05);
+}
+.track-cover {
+  width: 46px; height: 46px; border-radius: 10px; overflow: hidden;
+  background-color: var(--surface-2, rgba(255,255,255,.06));
 }
 .track:hover { background: rgba(255, 255, 255, .06); }
 .track.active { background: rgba(139, 123, 240, .16); }
