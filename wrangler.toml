@@ -1,0 +1,19 @@
+name = "cloudmusic-cf"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# 本地开发用的默认值。部署前请改掉：
+#   wrangler secret put STREAM_SECRET
+[vars]
+STREAM_SECRET = "dev-only-change-me"
+
+# 可选：把夸克 Cookie 放服务端，前端就不必每次传。
+# 也可以只在网页「设置」里填，存浏览器 localStorage。
+# QUARK_COOKIE = ""
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[observability]
+enabled = true

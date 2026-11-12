@@ -1,0 +1,178 @@
+import type { Env, ResolveRequest, StreamPayload } from './types'
+import { fetchPlaylist, resolveRef, searchTracks } from './playlist'
+import { pollLogin, startLogin } from './quark-login'
+import { fetchCover } from './cover'
+import { qrSvg } from './qr'
+import { resolveTrack } from './sources'
+import { fetchLyric } from './lyric'
+import { http, json, unseal, withCors } from './util'
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url)
+
+    if (request.method === 'OPTIONS') return json({})
+
+    if (url.pathname === '/api/health') {
+      return json({ ok: true, time: Date.now() })
+    }
+
+    // 夸克扫码登录：取二维码 / 轮询扫码结果
+    if (url.pathname === '/api/quark/login/start' && request.method === 'POST') {
+      try {
+        return json(await startLogin(env.STREAM_SECRET))
+      } catch (e) {
+        return json({ error: errMsg(e) }, 502)
+      }
+    }
+    if (url.pathname === '/api/quark/login/poll' && request.method === 'POST') {
+      try {
+        const b = (await request.json()) as { loginToken?: string }
+        return json(await pollLogin(b.loginToken ?? '', env.STREAM_SECRET))
+      } catch (e) {
+        // 轮询期间网络抖动不该打断前端定时器，继续 waiting
+        return json({ status: 'waiting', message: errMsg(e) })
+      }
+    }
+    // 二维码在 Worker 内本地生成，不访问任何外部服务
+    if (url.pathname === '/api/qr') {
+      const data = url.searchParams.get('data') ?? ''
+      if (!data || data.length > 1024) return new Response('bad request', { status: 400 })
+      try {
+        return new Response(qrSvg(data), {
+          headers: {
+            'Content-Type': 'image/svg+xml; charset=utf-8',
+            'Cache-Control': 'no-store',
+          },
+        })
+      } catch (e) {
+        return new Response(`二维码生成失败：${errMsg(e)}`, { status: 400 })
+      }
+    }
+
+    // 导入歌单：{ input: "链接或 id", platform?: "qq" | "netease" }
+    if (url.pathname === '/api/playlist' && request.method === 'POST') {
+      try {
+        const body = (await request.json()) as { input?: string; platform?: 'qq' | 'netease' }
+        const ref = await resolveRef(body.input ?? '', body.platform)
+        if (!ref) return json({ error: '看不出是哪个平台的歌单，贴个完整链接试试' }, 400)
+        const playlist = await fetchPlaylist(ref)
+        return json(playlist)
+      } catch (e) {
+        return json({ error: errMsg(e) }, 502)
+      }
+    }
+
+    // 找可播放的音源：夸克 → 网易云 → 酷我
+    if (url.pathname === '/api/resolve' && request.method === 'POST') {
+      try {
+        const body = (await request.json()) as ResolveRequest
+        const cookie =
+          body.cookie ||
+          request.headers.get('X-Quark-Cookie') ||
+          env.QUARK_COOKIE ||
+          ''
+        const result = await resolveTrack({ ...body, cookie }, env.STREAM_SECRET)
+        return json(result)
+      } catch (e) {
+        return json({ ok: false, notes: [], error: errMsg(e) }, 502)
+      }
+    }
+
+    // 歌词：网易云优先，QQ 兜底
+    // 搜索点歌
+    if (url.pathname === '/api/search' && request.method === 'POST') {
+      try {
+        const body = (await request.json()) as { keyword?: string }
+        const tracks = await searchTracks(body.keyword ?? '')
+        return json({ tracks })
+      } catch (e) {
+        return json({ error: errMsg(e) }, 502)
+      }
+    }
+
+    // 专辑封面：iTunes 公开接口
+    if (url.pathname === '/api/cover' && request.method === 'POST') {
+      try {
+        const body = (await request.json()) as { title?: string; artist?: string }
+        const url2 = await fetchCover(body.title ?? '', body.artist ?? '')
+        return json({ url: url2 })
+      } catch (e) {
+        return json({ url: null, error: errMsg(e) }, 502)
+      }
+    }
+
+    if (url.pathname === '/api/lyric' && request.method === 'POST') {
+      try {
+        const body = (await request.json()) as {
+          title?: string
+          artist?: string
+          platform?: string
+          platformId?: string
+        }
+        const r = await fetchLyric(
+          body.title ?? '',
+          body.artist ?? '',
+          body.platform,
+          body.platformId
+        )
+        return json(r)
+      } catch (e) {
+        return json({ lyric: null, error: errMsg(e) }, 502)
+      }
+    }
+
+    // 直链流式代理：令牌自包含上游地址 + Cookie，客户端看不到凭据
+    if (url.pathname === '/api/stream') {
+      const token = url.searchParams.get('t') ?? ''
+      const payload = await unseal<StreamPayload>(token, env.STREAM_SECRET)
+      if (!payload) return withCors(new Response('链接无效', { status: 400 }))
+      if (payload.exp < Date.now()) {
+        return withCors(new Response('链接已过期，重新点一次歌曲', { status: 410 }))
+      }
+
+      const h: Record<string, string> = {
+        'User-Agent': payload.ua,
+        Referer: payload.r,
+      }
+      if (payload.c) h.Cookie = payload.c
+      const range = request.headers.get('range')
+      if (range) h.Range = range
+
+      const upstream = await http(payload.u, { headers: h, timeoutMs: 30000 }).catch(() => null)
+      if (!upstream) return withCors(new Response('上游连不上', { status: 502 }))
+
+      const out = new Headers()
+      for (const k of [
+        'content-type',
+        'content-length',
+        'content-range',
+        'accept-ranges',
+        'content-disposition',
+        'etag',
+        'last-modified',
+        'cache-control',
+      ]) {
+        const v = upstream.headers.get(k)
+        if (v) out.set(k, v)
+      }
+      if (!out.has('accept-ranges')) out.set('accept-ranges', 'bytes')
+      out.set('Access-Control-Allow-Origin', '*')
+
+      // 夸克 CDN 412 = Cookie / __puus 不匹配，明确告诉前端去刷新登录态
+      if (upstream.status === 412) {
+        out.set('X-Cloudmusic-Error', 'quark-412')
+      }
+      return new Response(upstream.body, { status: upstream.status, headers: out })
+    }
+
+    if (url.pathname.startsWith('/api/')) return json({ error: 'not found' }, 404)
+
+    // 其余交给 PWA 静态资源
+    return env.ASSETS.fetch(request)
+  },
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
