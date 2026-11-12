@@ -15,7 +15,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
-  <link rel="stylesheet" href="/m.css?v=7" />
+  <link rel="stylesheet" href="/m.css?v=9" />
 </head>
 <body>
 
@@ -252,7 +252,10 @@
       <div class="lcard">
         <button id="set-install" class="list-row"><svg><use href="#i-phone"/></svg><span>添加到主屏幕</span><b>›</b></button>
         <p class="hint">装到桌面后像 App 一样全屏打开，没有浏览器地址栏。</p>
+        <p class="hint">安卓 Chrome 装好后，图标在「应用抽屉」里搜「云音乐」，长按可拖到桌面。桌面没图标时，再用 Chrome 右上角菜单 →「添加到主屏幕」重试一次。</p>
         <p class="hint" id="set-install-state"></p>
+        <button id="set-diag" class="list-row"><svg><use href="#i-settings"/></svg><span>复制安装诊断信息</span><b>›</b></button>
+        <p class="hint">桌面找不到图标时，点这里复制诊断信息发给我，一次定位问题。</p>
       </div>
 
       <div class="group-title">维护</div>
@@ -396,7 +399,7 @@
 <div id="toast" class="toast" hidden></div>
 
 <audio id="audio" preload="metadata" playsinline webkit-playsinline x5-playsinline></audio>
-<script src="/cover.js?v=7"></script>
-<script src="/m.js?v=7"></script>
+<script src="/cover.js?v=9"></script>
+<script src="/m.js?v=9"></script>
 </body>
 </html>

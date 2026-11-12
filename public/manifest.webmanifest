@@ -6,6 +6,7 @@
   "id": "/m.html",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait",
   "background_color": "#F5F6F8",
   "theme_color": "#F5F6F8",

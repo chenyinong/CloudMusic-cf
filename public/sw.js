@@ -1,4 +1,4 @@
-const CACHE = 'cloudmusic-cf-v7'
+const CACHE = 'cloudmusic-cf-v9'
 const PRECACHE = [
   '/', '/app.js', '/style.css', '/cover.js',
   '/m.html', '/m.css', '/m.js',
@@ -60,7 +60,7 @@ self.addEventListener('fetch', (e) => {
         if (res && res.ok) cache.put(e.request, res.clone())
         return res
       } catch {
-        // 离线回退：先按完整 URL 找，再忽略查询串找（页面里用了 ?v=7 防缓存，
+        // 离线回退：先按完整 URL 找，再忽略查询串找（页面里用了 ?v=8 防缓存，
         // 而预缓存里是 /m.css 这种无参 URL）
         const hit = (await caches.match(e.request)) ||
           (await caches.match(e.request, { ignoreSearch: true }))

@@ -377,7 +377,7 @@ async function openPlaylist(id) {
   }
   state.detail = p
   renderDetail()
-  showDetailPage()
+  navEnter('detail')   // 压一层，返回手势回到「歌单」列表
 }
 function renderDetail() {
   const p = state.detail
@@ -642,14 +642,24 @@ function highlightLyric() {
 }
 
 /* ══════════ 全屏播放页 ══════════ */
-function openPlayer() {
-  if (!current()) return
+function openPlayerUI() {
+  if (ppOpen) return
   ppOpen = true
   $('#player').hidden = false
   syncPlayer()
   setView('lyric', true) // 安卓：从迷你条进来直接停在歌词页
 }
-function closePlayer() { ppOpen = false; $('#player').hidden = true }
+function closePlayerUI() { ppOpen = false; $('#player').hidden = true }
+/** 打开播放页：压入一层，返回手势才会退回上一页而不是退出应用 */
+function openPlayer() {
+  if (!current()) return
+  if (ppOpen) return
+  navEnter('player')
+}
+function closePlayer() {
+  closePlayerUI()
+  if (navStack.includes('player')) navBack()
+}
 function setView(v, instant) {
   ppView = v
   const pager = $('#pp-pager')
@@ -745,6 +755,7 @@ function openSongSheet(t) {
     <button class="sheet-item" data-act="infothis">歌曲信息</button>
     <button class="sheet-item cancel" data-close>取消</button>`
   $('#sheet').hidden = false
+  pushOverlay('sheet')
 }
 function openPlayerSheet() {
   sheetTrack = null
@@ -765,8 +776,10 @@ function openPlayerSheet() {
     <button class="sheet-item" data-act="fav">收藏 / 取消收藏</button>
     <button class="sheet-item cancel" data-close>取消</button>`
   $('#sheet').hidden = false
+  pushOverlay('sheet')
 }
-function closeSheet() { $('#sheet').hidden = true }
+function hideSheet() { $('#sheet').hidden = true; sheetTrack = null }
+function closeSheet() { closeOverlay('sheet') }
 function showInfo(t) {
   if (!t) return
   const r = t === current() ? state.resolved : null
@@ -778,6 +791,7 @@ function showInfo(t) {
     <div class="info-row"><span>来源</span><b>${esc(t.platform || '—')}</b></div>
     <div class="info-row"><span>音源</span><b>${r ? esc(r.source) + (r.partial ? '（试听片段）' : '') : '—'}</b></div>`
   $('#modal-info').hidden = false
+  pushOverlay('modal-info')
 }
 function showQueue() {
   const list = state.playlist?.tracks || []
@@ -792,10 +806,11 @@ function showQueue() {
         <div class="song-sub">${esc(t.artist || '未知歌手')}</div></div>
       </div>`).join('')
     root.querySelectorAll('.song').forEach((el) =>
-      el.addEventListener('click', () => { playAt(Number(el.dataset.i)); $('#modal-queue').hidden = true }))
+      el.addEventListener('click', () => { playAt(Number(el.dataset.i)); closeOverlay('modal-queue') }))
     observeCovers(root, list)
   }
   $('#modal-queue').hidden = false
+  pushOverlay('modal-queue')
 }
 function adjustOffset(delta) {
   state.lyricOffset += delta
@@ -807,7 +822,7 @@ async function runManualLyric() {
   const title = $('#ls-title').value.trim()
   const artist = $('#ls-artist').value.trim()
   if (!title) return
-  $('#modal-lyric').hidden = true
+  closeOverlay('modal-lyric')
   const inner = $('#pp-lyric-inner')
   inner.innerHTML = '<div class="pp-lyric-loading">歌词加载中…</div>'
   try {
@@ -820,15 +835,20 @@ async function runManualLyric() {
 }
 
 /* ══════════ Tab / 页面 ══════════ */
-function switchTab(tab) {
+function renderTab(tab) {
   state.tab = tab
-  state.detail = null
   $$('.page').forEach((p) => { p.hidden = p.dataset.page !== tab })
   $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab))
   $('#page-title').textContent = PAGE_TITLE[tab]
   $('#bar-settings').hidden = tab === 'settings'
   $('#bar-refresh').hidden = tab !== 'library'
   $('#pages').scrollTop = 0
+}
+/** 切 Tab：先退出当前层级（详情页 / 播放页 / 弹层），再切 */
+function switchTab(tab) {
+  state.detail = null
+  leaveNav()
+  renderTab(tab)
 }
 /** 歌单详情：不属于任何 Tab，返回按钮回到「歌单」 */
 function showDetailPage() {
@@ -839,6 +859,84 @@ function showDetailPage() {
   $('#bar-refresh').hidden = true
   $('#pages').scrollTop = 0
 }
+
+/* ══════════ 返回栈：安卓式返回手势 ══════════ */
+/**
+ * navStack 记录界面层级：'detail' 歌单详情 / 'player' 全屏播放页。
+ * 每进一层压一条 history，安卓左边缘右滑（PWA 里的系统返回）就会触发 popstate，
+ * 我们在这里退回上一层，而不是让系统直接把 App 关掉。
+ * 弹层（更多菜单 / 播放列表 / 歌曲信息 / 手动歌词）也压一条：返回时先关弹层。
+ */
+let navStack = []
+let navLock = 0           // 主动 history.go 回退时，忽略这一次 popstate
+
+const OVERLAY_IDS = ['sheet', 'modal-queue', 'modal-info', 'modal-lyric']
+function overlayOpen() {
+  return OVERLAY_IDS.some((id) => { const el = document.getElementById(id); return el && !el.hidden })
+}
+function hideAllOverlays() {
+  OVERLAY_IDS.forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true })
+  sheetTrack = null
+}
+/** 当前 history 条目的层级深度（0 = 初始页） */
+function navDepth() { return (history.state || {}).cmDepth || 0 }
+/** 打开弹层：压一条 history，返回键先关它 */
+function pushOverlay(kind) {
+  const cur = history.state || {}
+  const depth = cur.cmDepth || 0
+  const st = { cmNav: navStack, cmDepth: cur.cmOverlay ? depth : depth + 1, cmOverlay: kind }
+  if (cur.cmOverlay) history.replaceState(st, '')   // 弹层换弹层：改写当前条目
+  else history.pushState(st, '')
+}
+/** 关闭弹层（用户主动取消 / 确定）：合并回页面层级 */
+function closeOverlay(id) {
+  const el = document.getElementById(id)
+  if (el) el.hidden = true
+  if ((history.state || {}).cmOverlay) history.back()
+}
+/** 进入下一层（歌单详情 / 全屏播放页） */
+function navEnter(name) {
+  navStack = navStack.concat(name)
+  history.pushState({ cmNav: navStack, cmDepth: navDepth() + 1 }, '')
+  applyNav()
+}
+/** 返回上一层：统一交给 popstate 处理 */
+function navBack() { history.back() }
+/** 彻底退出层级（切 Tab 时用）：把 history 指针退回初始页 */
+function leaveNav() {
+  hideAllOverlays()
+  const d = navDepth()
+  if (!d) return
+  navStack = []
+  navLock = 1
+  history.go(-d)
+}
+/** 按当前 history 状态重绘界面 */
+function applyNav(st) {
+  const s = st || history.state || {}
+  const nav = s.cmNav || []
+  if (!s.cmOverlay) hideAllOverlays()
+  if (nav.includes('player')) {
+    if (nav.includes('detail')) showDetailPage()
+    openPlayerUI()
+  } else {
+    closePlayerUI()
+    if (nav.includes('detail')) showDetailPage()
+    else {
+      state.detail = null
+      renderTab(state.tab)
+    }
+  }
+}
+window.addEventListener('popstate', (e) => {
+  if (navLock > 0) { navLock--; if (!navLock) applyNav(); return }
+  navStack = (e.state && e.state.cmNav) || []
+  applyNav(e.state)
+})
+// 初始页：把当前 history 条目标成根层级
+history.replaceState({ cmNav: [], cmDepth: 0 }, '')
+// 调试用：设置页「复制安装诊断信息」里也会用到
+window.__nav = () => ({ stack: navStack, depth: navDepth(), state: history.state })
 
 /* ══════════ 夸克登录 ══════════ */
 function renderQuarkState() {
@@ -1077,7 +1175,7 @@ $('#play-all').addEventListener('click', () => {
 })
 
 // 歌单详情
-$('#pl-back').addEventListener('click', () => switchTab('playlist'))
+$('#pl-back').addEventListener('click', () => navBack())
 $('#pl-play-all').addEventListener('click', () => {
   const p = state.detail
   if (p?.tracks?.length) playFromList(p.tracks, 0, p.name)
@@ -1154,7 +1252,9 @@ $('#set-clear').addEventListener('click', () => {
 $('#set-desktop').addEventListener('click', () => { sessionStorage.setItem('cm.desktop', '1'); location.href = '/' })
 
 /* ══════════ 添加到主屏幕（PWA 安装） ══════════ */
+const PWA_INSTALLED_KEY = 'cm.pwa.installed'
 let installPrompt = null
+let promptReady = false            // 浏览器是否给过「安装」入口（可安装才给）
 function isStandalone() {
   return window.matchMedia('(display-mode: standalone)').matches ||
     window.matchMedia('(display-mode: fullscreen)').matches ||
@@ -1163,10 +1263,14 @@ function isStandalone() {
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault()
   installPrompt = e
+  promptReady = true
+  renderInstallState()
 })
 window.addEventListener('appinstalled', () => {
   installPrompt = null
-  toast('已添加到主屏幕')
+  localStorage.setItem(PWA_INSTALLED_KEY, String(Date.now()))
+  toast('安装完成！图标在「应用抽屉」里搜「云音乐」，长按可拖到桌面')
+  renderInstallState()
 })
 $('#set-install').addEventListener('click', async () => {
   if (isStandalone()) { toast('已经在主屏幕应用里运行了'); return }
@@ -1174,11 +1278,12 @@ $('#set-install').addEventListener('click', async () => {
     installPrompt.prompt()
     const r = await installPrompt.userChoice
     installPrompt = null
-    if (r?.outcome === 'accepted') toast('正在添加到主屏幕…')
+    if (r?.outcome === 'accepted') toast('正在安装…装好后在「应用抽屉」找「云音乐」')
     else toast('已取消添加')
     return
   }
-  toast('浏览器菜单里选「添加到主屏幕 / 安装应用」')
+  // 没拿到安装事件（部分国产 ROM / 定制浏览器不触发）：只能走 Chrome 自己的菜单
+  toast('请点浏览器右上角菜单 → 添加到主屏幕 / 安装应用')
 })
 // 已经是 App 形态就隐藏这一行
 if (isStandalone()) $('#set-install').hidden = true
@@ -1186,8 +1291,10 @@ if (isStandalone()) $('#set-install').hidden = true
 async function renderInstallState() {
   const el = $('#set-install-state')
   if (!el) return
+  const installed = !!localStorage.getItem(PWA_INSTALLED_KEY)
   const bits = []
   bits.push(isStandalone() ? '已在主屏幕 App 中运行' : '当前在浏览器中运行')
+  if (installed) bits.push('✓ 本机已安装（图标在应用抽屉里）')
   if ('serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.getRegistration()
@@ -1197,8 +1304,38 @@ async function renderInstallState() {
     bits.push('浏览器不支持离线缓存')
   }
   if (!window.isSecureContext) bits.push('⚠ 非 HTTPS，无法安装')
+  else if (!promptReady && !installed) bits.push('⚠ 浏览器没弹出安装框，请用 Chrome 菜单 → 添加到主屏幕')
   el.textContent = bits.join(' · ')
 }
+
+/** 复制安装诊断信息：用户在手机上点了直接粘贴给我，一次定位问题 */
+$('#set-diag').addEventListener('click', async () => {
+  const lines = []
+  lines.push('URL: ' + location.href)
+  lines.push('UA: ' + navigator.userAgent)
+  lines.push('isSecureContext: ' + window.isSecureContext)
+  lines.push('display-mode: ' + (isStandalone() ? 'standalone' : 'browser'))
+  lines.push('manifest: ' + (document.querySelector('link[rel=manifest]')?.href || '无'))
+  lines.push('浏览器给出安装入口: ' + promptReady)
+  lines.push('本机已安装标记: ' + (localStorage.getItem(PWA_INSTALLED_KEY) || '无'))
+  try {
+    const reg = await navigator.serviceWorker.getRegistration()
+    lines.push('SW: ' + (reg ? `scope=${reg.scope} active=${!!reg.active} state=${reg.active && reg.active.state}` : '未注册'))
+  } catch (e) { lines.push('SW: 查询失败 ' + e.message) }
+  for (const u of ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/sw.js']) {
+    try {
+      const r = await fetch(u, { cache: 'no-store' })
+      lines.push(u + ': ' + r.status + ' ' + (r.headers.get('content-type') || ''))
+    } catch (e) { lines.push(u + ': 失败 ' + e.message) }
+  }
+  const txt = lines.join('\n')
+  try {
+    await navigator.clipboard.writeText(txt)
+    toast('诊断信息已复制，粘贴发给我')
+  } catch {
+    prompt('复制下面的诊断信息：', txt)
+  }
+})
 renderInstallState()
 
 // 登录页
@@ -1314,15 +1451,29 @@ $('#pp-pager .pp-page[data-view="cover"]').addEventListener('click', () => setVi
 $('#pp-pager .pp-page[data-view="lyric"]').addEventListener('click', (e) => {
   if (!e.target.closest('.pp-lyric-line')) setView('cover')
 })
-// 左边缘右滑返回（安卓 edgeBackGesture）
+/* 左边缘右滑返回（安卓 edge back）：播放页收起，其它层级返回上一级 */
 let edgeX = null
-pager.addEventListener('touchstart', (e) => { edgeX = e.touches[0].clientX < 28 ? e.touches[0].clientX : null }, { passive: true })
-pager.addEventListener('touchend', (e) => {
+let edgeY = null
+document.addEventListener('touchstart', (e) => {
+  if ($('#app').hidden) return
+  if (e.target.closest && e.target.closest('#mini')) return   // 迷你条自己有左右滑切歌
+  const t = e.touches[0]
+  if (!t) return
+  edgeX = t.clientX < 28 ? t.clientX : null
+  edgeY = edgeX === null ? null : t.clientY
+}, { passive: true })
+document.addEventListener('touchend', (e) => {
   if (edgeX === null) return
   const dx = e.changedTouches[0].clientX - edgeX
+  const dy = Math.abs(e.changedTouches[0].clientY - (edgeY || 0))
   edgeX = null
-  if (dx > 40 && ppView === 'cover') closePlayer()
+  edgeY = null
+  if (dx <= 40 || dx < dy * 1.5) return      // 必须是明显的横向滑动
+  if (ppOpen) closePlayer()
+  else navBack()
 }, { passive: true })
+// 键盘返回键（外接键盘 Esc）
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') navBack() })
 
 // 更多菜单（事件委托）
 $('#sheet').addEventListener('click', (e) => {
@@ -1332,7 +1483,10 @@ $('#sheet').addEventListener('click', (e) => {
   if (!btn) return
   const act = btn.dataset.act
   const t = sheetTrack
-  closeSheet()
+  // 弹层换弹层时只隐藏 DOM，历史条目交给后面的 pushOverlay 改写（避免多退一格）
+  const opensOverlay = act === 'info' || act === 'infothis' || act === 'queue' || act === 'searchlyric'
+  if (opensOverlay) hideSheet()
+  else closeSheet()
   switch (act) {
     case 'play': if (t) playFromList([t], 0); break
     case 'favthis': {
@@ -1369,7 +1523,7 @@ $('#sheet').addEventListener('click', (e) => {
 })
 $('#ls-ok').addEventListener('click', runManualLyric)
 $$('.modal').forEach((m) => m.addEventListener('click', (e) => {
-  if (e.target === m || e.target.closest('[data-close]')) m.hidden = true
+  if (e.target === m || e.target.closest('[data-close]')) closeOverlay(m.id)
 }))
 
 // iOS 兜底：若仍被拒，点一下就能播
