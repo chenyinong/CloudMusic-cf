@@ -53,13 +53,13 @@ button { cursor: pointer; }
 }
 .import label, .modal-box label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
 .row { display: flex; gap: 8px; }
-input[type=text], select, textarea {
+input[type=text], input[type=password], select, textarea {
   flex: 1; min-width: 0; color: var(--text);
   background: rgba(0, 0, 0, .24);
   border: 1px solid var(--line); border-radius: 11px;
   padding: 11px 12px; outline: none;
 }
-input[type=text]:focus, select:focus, textarea:focus { border-color: var(--accent); }
+input[type=text]:focus, input[type=password]:focus, select:focus, textarea:focus { border-color: var(--accent); }
 select { flex: 0 0 106px; }
 textarea { width: 100%; resize: vertical; }
 .hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; line-height: 1.6; }
@@ -375,6 +375,7 @@ details pre { white-space: pre-wrap; word-break: break-all; background: rgba(0,0
 :root[data-theme="light"] .modal { background: rgba(20, 20, 30, .4); }
 :root[data-theme="light"] .modal-box { background: #fff; color: var(--text); }
 :root[data-theme="light"] input[type=text],
+:root[data-theme="light"] input[type=password],
 :root[data-theme="light"] select,
 :root[data-theme="light"] textarea { background: #fff; color: var(--text); }
 :root[data-theme="light"] .track.active { background: rgba(108, 92, 231, .14); }
