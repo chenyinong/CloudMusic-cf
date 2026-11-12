@@ -721,12 +721,19 @@ function startResolved(i, t, resolved, fromCache, attempt) {
   renderSourceInfo()
 }
 /**
- * 提前把上一首/下一首解析好，用户点「下一首」或返回上一首时不用等。
- * 只预取相邻两首，既够用又不会把服务器打爆。
+ * 提前把相邻的歌解析好，用户点「下一首」或返回上一首时不用等。
+ * 往后多取 2~3 首（连点时 C/D 也已在手），错开几百毫秒发，
+ * 别跟当前歌的起播抢带宽。
  */
+let prefetchTimer = 0
 function prefetchNeighbors() {
   prefetchOne(nextIndex(1))
   prefetchOne(nextIndex(-1))
+  clearTimeout(prefetchTimer)
+  prefetchTimer = setTimeout(() => {
+    prefetchOne(nextIndex(2))
+    prefetchTimer = setTimeout(() => prefetchOne(nextIndex(3)), 800)
+  }, 800)
 }
 /** 预取一首歌的音源（已经在缓存里 / 已在预取就跳过） */
 async function prefetchOne(i) {
@@ -734,16 +741,41 @@ async function prefetchOne(i) {
   if (i < 0 || !pl?.tracks?.[i]) return
   const t = pl.tracks[i]
   const k = resolvedKey(t)
-  if (!k || resolvedGet(t) || prefetching.has(k)) return
+  if (!k) return
+  // 已经解析过的也要把音频头焐热：切歌时 audio 一上来就有数据
+  const cached = resolvedGet(t)
+  if (cached) { warmAudio(cached.url); return }
+  if (prefetching.has(k)) return
   prefetching.add(k)
   try {
     const d = await post('/api/resolve', {
       title: t.title, artist: t.artist, durationSec: t.durationSec,
       platformId: t.platformId, cookie: state.cookie, quarkId: t.quarkId,
     })
-    if (d.ok && d.resolved) resolvedPut(t, d.resolved)
+    if (d.ok && d.resolved) {
+      resolvedPut(t, d.resolved)
+      warmAudio(d.resolved.url)
+    }
   } catch { /* 预取失败无所谓，真播的时候再解析 */ }
   prefetching.delete(k)
+}
+
+/** 本会话里已经焐热过音频头的直链（不重复拉） */
+const warmed = new Set()
+/**
+ * 把一条直链的头几个字节先拉一遍，把链路焐热：
+ * 浏览器到 CF 边缘的连接、边缘到夸克 CDN 的连接都复用得上，
+ * 真切歌时省掉首字节那几十到几百毫秒。
+ * 拉不到就算了 —— 只是预热，不影响播放。
+ */
+function warmAudio(url) {
+  if (!url || warmed.has(url)) return
+  warmed.add(url)
+  try {
+    fetch(url, { headers: { Range: 'bytes=0-32767' } })
+      .then((r) => { r.body?.cancel?.() })
+      .catch(() => {})
+  } catch { /* 预热失败无所谓 */ }
 }
 function onTrackChanged(t) {
   lyricLines = []
@@ -753,15 +785,46 @@ function onTrackChanged(t) {
   syncPlayer()
   if (ppView === 'lyric') ensureLyric()
 }
+/* ════════ 随机播放的洗牌队列 ════════
+ * 以前「下一首」每次现场随机：预取时随机到 X、真切歌时又随机到 Y，
+ * 预取的歌几乎永远不是要播的那首 —— 随机模式下每次切歌都得干等解析。
+ * 改成把整单洗成一条固定队列顺着走，下一首是确定的，预取才有意义。
+ */
+let shuffleOrder = []   // 打乱后的下标序列
+let shuffleList = null  // 这份队列是给哪个歌单生成的（换了歌单就重洗）
+
+function rebuildShuffle() {
+  const n = state.playlist?.tracks?.length ?? 0
+  shuffleOrder = []
+  for (let i = 0; i < n; i++) shuffleOrder.push(i)
+  // Fisher–Yates 洗牌
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const t = shuffleOrder[i]; shuffleOrder[i] = shuffleOrder[j]; shuffleOrder[j] = t
+  }
+  // 正在播的这首挪到队首：「下一首又是它」不对
+  const cur = shuffleOrder.indexOf(state.index)
+  if (cur > 0) { shuffleOrder.splice(cur, 1); shuffleOrder.unshift(state.index) }
+  shuffleList = state.playlist
+}
+
 /** 下一首的下标（按播放模式）；切歌和预取共用 */
 function nextIndex(delta) {
   const n = state.playlist?.tracks?.length ?? 0
   if (!n) return -1
   if (state.playMode === 'repeat1') return (state.index + delta + n) % n
   if (state.playMode === 'shuffle') {
-    let next = state.index
-    if (n > 1) while (next === state.index) next = Math.floor(Math.random() * n)
-    return next
+    if (n <= 1) return state.index
+    if (shuffleList !== state.playlist || shuffleOrder.length !== n) rebuildShuffle()
+    let pos = shuffleOrder.indexOf(state.index)
+    if (pos < 0) { rebuildShuffle(); pos = 0 }
+    // 播到队尾还往前走：重新洗一轮（当前歌排最前），从新队列里取。
+    // 这里重洗是幂等的 —— 预取先问一次、真切歌再问一次，拿到的是同一首
+    if (pos === n - 1 && delta > 0) {
+      rebuildShuffle()
+      return shuffleOrder[delta % n]
+    }
+    return shuffleOrder[(pos + (delta % n) + n) % n]
   }
   return (state.index + delta + n) % n
 }
