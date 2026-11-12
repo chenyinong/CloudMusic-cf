@@ -115,11 +115,40 @@
     return '/api/cover-img?u=' + encodeURIComponent(url)
   }
 
+  /** 取一串歌曲里第一张有封面的（歌单封面用第一首歌的封面） */
+  function firstCover(tracks) {
+    if (!tracks) return ''
+    for (var i = 0; i < tracks.length; i++) {
+      var u = tracks[i] && tracks[i].coverUrl
+      if (u) return String(u)
+    }
+    return ''
+  }
+
+  /**
+   * 给容器铺封面：先画安卓同款占位画，真图加载成功再换上去。
+   * 真图挂了（404 / 防盗链）就保持占位画，不会出现裂图。
+   */
+  function applyCover(el, url, seed) {
+    if (!el) return
+    el.style.backgroundSize = 'cover'
+    el.style.backgroundPosition = 'center'
+    el.style.backgroundImage = 'url("' + generatedCover(seed) + '")'
+    if (!url) return
+    var real = proxied(url)
+    var img = new Image()
+    img.onload = function () { el.style.backgroundImage = 'url("' + real + '")' }
+    img.onerror = function () { /* 真图挂了，保留占位画 */ }
+    img.src = real
+  }
+
   global.CoverArt = {
     colors: coverColors,
     generated: generatedCover,
     theme: coverTheme,
     extractTheme: extractTheme,
     proxied: proxied,
+    firstCover: firstCover,
+    applyCover: applyCover,
   }
 })(window)

@@ -335,7 +335,7 @@ function renderSourceInfo() {
 function savePlists() {
   // 已同步的歌单只留元数据，歌曲列表在云端，点开时按需拉取
   saveJSON('cm.plists', state.plists.map((p) => (p.synced
-    ? { id: p.id, cloudId: p.cloudId, name: p.name, platform: p.platform, count: p.count, updatedAt: p.updatedAt, synced: true }
+    ? { id: p.id, cloudId: p.cloudId, name: p.name, platform: p.platform, count: p.count, updatedAt: p.updatedAt, synced: true, cover: p.cover || '' }
     : p)))
 }
 function renderPlists() {
@@ -356,7 +356,8 @@ function renderPlists() {
     </div>`).join('')
   root.querySelectorAll('.pli-cover').forEach((el) => {
     const p = state.plists.find((x) => x.id === el.parentElement.dataset.id)
-    if (p) el.style.backgroundImage = `url("${CoverArt.generated(p.name)}")`
+    // 歌单封面用第一首歌的封面，取不到就退回安卓同款占位画
+    if (p) CoverArt.applyCover(el, p.cover || CoverArt.firstCover(p.tracks), p.name)
   })
   // 整行点击即打开歌单，这里只留「删除」
   root.querySelectorAll('[data-act="del"]').forEach((b) =>
@@ -410,16 +411,17 @@ async function deletePlaylist(id) {
 /** 导入的歌单进集合；已登录则同时存到云端 */
 async function addPlaylist(pl) {
   let item
+  const cover = CoverArt.firstCover(pl.tracks)   // 歌单封面 = 第一首歌的封面
   if (state.account?.token) {
     try {
       const d = await api('/api/playlists', { method: 'POST', body: { name: pl.name, platform: pl.platform, tracks: pl.tracks } })
-      item = { id: 'c' + d.id, cloudId: d.id, name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: true }
+      item = { id: 'c' + d.id, cloudId: d.id, name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: true, cover }
     } catch {
       toast('云端保存失败，已存在本机')
-      item = { id: 'l' + Date.now(), name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: false, tracks: pl.tracks }
+      item = { id: 'l' + Date.now(), name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: false, tracks: pl.tracks, cover }
     }
   } else {
-    item = { id: 'l' + Date.now(), name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: false, tracks: pl.tracks }
+    item = { id: 'l' + Date.now(), name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: false, tracks: pl.tracks, cover }
   }
   state.plists.unshift(item)
   savePlists()
@@ -461,11 +463,13 @@ async function loadCloudLists() {
         exist.synced = true
         exist.count = p.count ?? exist.count
         exist.updatedAt = p.updated_at || exist.updatedAt
+        exist.cover = p.cover || exist.cover || CoverArt.firstCover(exist.tracks)
         delete exist.tracks
       } else {
         state.plists.unshift({
           id: cid, cloudId: p.id, name: p.name, platform: p.platform,
           count: p.count || 0, updatedAt: p.updated_at || Date.now(), synced: true,
+          cover: p.cover || '',
         })
       }
     }
