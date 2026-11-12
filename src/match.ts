@@ -50,6 +50,21 @@ export function sameTitle(a: string, b: string): boolean {
   return na.length > 0 && na === nb
 }
 
+/**
+ * 宽松歌名匹配：完全一样算命中；一边包含另一边也算。
+ *
+ * 「青花瓷 (Live版)」对「青花瓷」、「青花瓷 - 周杰伦」对「青花瓷」都算沾边。
+ * 用来把「根本不是这首歌」的候选剔掉 —— 签一个夸克直链要三个请求，
+ * 拿错歌既慢又难听，不如不签。
+ */
+export function titleLoose(a: string, b: string): boolean {
+  const na = norm(stripBrackets(a))
+  const nb = norm(stripBrackets(b))
+  if (!na || !nb) return false
+  if (na === nb) return true
+  return na.includes(nb) || nb.includes(na)
+}
+
 export function artistHit(target: string, candidate: string): boolean {
   const n = norm(target)
   if (!n) return true

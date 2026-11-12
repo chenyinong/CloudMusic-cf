@@ -25,6 +25,8 @@ export interface QuarkDirect {
   cookie: string
   fileName: string
   size: number
+  /** 夸克报的真实时长（秒），判断是不是试听片段优先用它 */
+  durationSec: number
 }
 
 function headers(cookie: string): Record<string, string> {
@@ -52,24 +54,43 @@ export async function verifyQuarkCookie(
   cookie: string
 ): Promise<{ valid: boolean | null; account: string }> {
   if (!cookie || !cookie.includes('__pus')) return { valid: false, account: '' }
+  // 列自己网盘根目录：必须登录才拿得到，这才是真的登录态。
+  // （会员信息接口游客态也返回 code=0，Cookie 过期了照样判成「已登录」——
+  //   安卓端踩过这个坑，这里跟着它走。）
+  try {
+    const r = await http(
+      `${HOST}/1/clouddrive/file/sort?pr=ucpro&fr=pc&pdir_fid=0&_page=1&_size=1&_fetch_total=1`,
+      {
+        headers: { 'User-Agent': UA_PC, Referer: 'https://pan.quark.cn/', Cookie: cookie },
+        timeoutMs: 6000,
+      }
+    )
+    if (r.status === 401 || r.status === 403) return { valid: false, account: '' }
+    const j = (await r.json().catch(() => null)) as any
+    if (!j) return { valid: null, account: '' }
+    const code = j?.code ?? j?.status
+    if (code !== undefined && code !== null && Number(code) !== 0) {
+      return { valid: false, account: '' }
+    }
+    if (!j?.data || !('list' in j.data)) return { valid: false, account: '' }
+    return { valid: true, account: await quarkNickname(cookie) }
+  } catch {
+    return { valid: null, account: '' }
+  }
+}
+
+/** 账号昵称，只用来显示，拿不到不影响「有效」这个结论。 */
+async function quarkNickname(cookie: string): Promise<string> {
   try {
     const r = await http(`${PAN}/account/info`, {
       headers: { 'User-Agent': UA_PC, Referer: 'https://pan.quark.cn/', Cookie: cookie },
       timeoutMs: 5000,
     })
-    if (r.status === 401 || r.status === 403) return { valid: false, account: '' }
-    if (!r.ok) return { valid: null, account: '' }
+    if (!r.ok) return ''
     const j = (await r.json().catch(() => null)) as any
-    if (!j) return { valid: null, account: '' }
-    const nickname = String(j?.data?.member?.nickname ?? j?.data?.nickname ?? '')
-    if (nickname) return { valid: true, account: nickname }
-    const code = j?.code ?? j?.status
-    if (code !== undefined && code !== null && Number(code) !== 0) {
-      return { valid: false, account: '' }
-    }
-    return { valid: true, account: nickname }
+    return String(j?.data?.member?.nickname ?? j?.data?.nickname ?? '')
   } catch {
-    return { valid: null, account: '' }
+    return ''
   }
 }
 
@@ -102,10 +123,12 @@ interface ShareFile {
   fid: string
   fileName: string
   size: number
+  /** 夸克报的真实时长（秒），0 表示没有 */
+  durationSec: number
 }
 
 const stokenCache = new Map<string, CacheEntry<string>>()
-const shareFileCache = new Map<string, CacheEntry<ShareFile>>()
+const shareFileCache = new Map<string, CacheEntry<ShareFile[]>>()
 
 /** Cookie 摘要：stoken 按账号分开存（换账号不会串味）。 */
 function cookieKey(cookie: string): string {
@@ -144,30 +167,56 @@ async function fetchStoken(pwdId: string, cookie: string): Promise<string | null
 async function fetchShareFiles(
   pwdId: string,
   stoken: string,
-  cookie: string
+  cookie: string,
+  onProgress?: () => void
 ): Promise<ShareFile[]> {
+  const files = await listShareDir(pwdId, stoken, cookie, '', onProgress)
+  const audio = files.filter((f) => AUDIO_EXT.test(f.fileName))
+  if (audio.length) return sortByQuality(audio)
+  // 分享根目录只有文件夹 → 往里走一层（很多网盘分享是「一个文件夹」）
+  const dirs = files.filter((f) => f.isDir)
+  const out: ShareFile[] = []
+  for (const d of dirs.slice(0, 5)) {
+    const sub = await listShareDir(pwdId, stoken, cookie, d.fid, onProgress)
+    out.push(...sub.filter((f) => AUDIO_EXT.test(f.fileName)))
+    if (out.length >= 5) break
+  }
+  return sortByQuality(out)
+}
+
+/** 音质从高到低（flac > wav > mp3），同音质按大小排。 */
+function sortByQuality(list: ShareFile[]): ShareFile[] {
+  return list
+    .slice()
+    .sort(
+      (a, b) =>
+        quality(b.fileName) - quality(a.fileName) || b.size - a.size
+    )
+}
+
+/** 列分享里某一层的文件（pdirFid 为空 = 根目录）。 */
+async function listShareDir(
+  pwdId: string,
+  stoken: string,
+  cookie: string,
+  pdirFid: string,
+  onProgress?: () => void
+): Promise<Array<ShareFile & { isDir: boolean }>> {
   const detailUrl =
     `${HOST}/1/clouddrive/share/sharepage/detail?pr=ucpro&fr=pc` +
     `&pwd_id=${enc(pwdId)}&stoken=${enc(stoken)}` +
+    (pdirFid ? `&pdir_fid=${enc(pdirFid)}` : '') +
     `&_fetch_share=1&_fetch_banner=1&_fetch_total=1&_page=1&_size=100`
   const dJson = await getJson<any>(detailUrl, headers(cookie)).catch(() => null)
-  const files: any[] = (dJson?.data?.list ?? []).filter((f: any) =>
-    AUDIO_EXT.test(String(f.file_name ?? ''))
-  )
-  if (!files.length) return []
-  files.sort(
-    (a, b) =>
-      quality(String(b.file_name)) - quality(String(a.file_name)) ||
-      Number(b.size ?? 0) - Number(a.size ?? 0)
-  )
-  const f = files[0]
-  return [
-    {
-      fid: String(f.fid ?? ''),
-      fileName: String(f.file_name ?? 'audio'),
-      size: Number(f.size ?? 0),
-    },
-  ]
+  onProgress?.()
+  const list: any[] = dJson?.data?.list ?? []
+  return list.map((x: any) => ({
+    fid: String(x.fid ?? ''),
+    fileName: String(x.file_name ?? 'audio'),
+    size: Number(x.size ?? 0),
+    durationSec: Number(x.duration ?? 0),
+    isDir: !!x.dir || Number(x.dir_fid ?? 0) > 0,
+  }))
 }
 
 /** 3) 签直链，同时把刷新的 __puus 合进 Cookie */
@@ -176,7 +225,7 @@ async function signDownload(
   stoken: string,
   fid: string,
   cookie: string
-): Promise<{ url: string; cookie: string; size: number } | null> {
+): Promise<{ url: string; cookie: string; size: number; durationSec: number } | null> {
   const dlRes = await http(`${HOST}/1/clouddrive/file/download?pr=ucpro&fr=pc`, {
     method: 'POST',
     headers: headers(cookie),
@@ -195,14 +244,61 @@ async function signDownload(
     url: https(String(url)),
     cookie: linkCookie,
     size: Number(dlJson?.data?.[0]?.size ?? 0),
+    durationSec: Number(dlJson?.data?.[0]?.duration ?? 0),
   }
 }
 
-export async function quarkDirect(shareUrl: string, cookie: string): Promise<QuarkDirect | null> {
+/**
+ * 探一下签出来的直链到底能不能下。
+ *
+ * 直链是跟签发那次的 Cookie（__puus）绑定的，Cookie 不匹配时 CDN 一律 412，
+ * 这种链接交给前端也是 412 白跑一趟，不如当场丢掉换下一个文件。
+ *
+ *   'ok'      —— 能下
+ *   'denied'  —— 412 / 404：这条直链废了（Cookie 对不上、分享没了），换下一个
+ *   'unknown' —— 网络抖动之类判断不了：照样给出去，别因为边缘节点抽风就误杀好资源
+ */
+async function probeSigned(
+  url: string,
+  cookie: string
+): Promise<'ok' | 'denied' | 'unknown'> {
+  try {
+    const r = await http(url, {
+      headers: {
+        'User-Agent': UA_PC,
+        Referer: QUARK_REFERER,
+        Cookie: cookie,
+        Range: 'bytes=0-8191',
+      },
+      timeoutMs: 4000,
+    })
+    if (r.status === 412 || r.status === 404) {
+      await r.body?.cancel()
+      return 'denied'
+    }
+    if (!r.ok && r.status !== 206) {
+      await r.body?.cancel()
+      return 'unknown'
+    }
+    const ct = r.headers.get('content-type') ?? ''
+    await r.body?.cancel()
+    return /text\/html|application\/json/i.test(ct) ? 'unknown' : 'ok'
+  } catch {
+    return 'unknown'
+  }
+}
+
+export async function quarkDirect(
+  shareUrl: string,
+  cookie: string,
+  onProgress?: () => void
+): Promise<QuarkDirect | null> {
   const pwdId = pwdIdOf(shareUrl)
   if (!pwdId || !cookie.trim()) return null
 
   const tk = `${pwdId}|${cookieKey(cookie)}`
+  /** 探测下来「直链废了」的候选，留着当最后兜底 */
+  let denied: QuarkDirect | null = null
 
   // 最多两轮：第一轮吃缓存，签发失败（stoken/fid 过期）就清缓存重跑一次
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -210,37 +306,52 @@ export async function quarkDirect(shareUrl: string, cookie: string): Promise<Qua
     const st = stokenCache.get(tk)
     if (st && Date.now() - st.at < STOKEN_TTL) stoken = st.v
 
-    let file: ShareFile | null = null
+    let files: ShareFile[] | null = null
     const sf = shareFileCache.get(pwdId)
-    if (sf && Date.now() - sf.at < SHARE_FILE_TTL) file = sf.v
+    if (sf && Date.now() - sf.at < SHARE_FILE_TTL) files = sf.v
 
     if (!stoken) {
       const fresh = await fetchStoken(pwdId, cookie).catch(() => null)
+      onProgress?.()
       if (!fresh) return null
       stoken = fresh
       putCache(stokenCache, tk, stoken, STOKEN_MAX)
     }
-    if (!file) {
-      const files = await fetchShareFiles(pwdId, stoken, cookie).catch(() => null)
-      if (!files || !files.length) return null
-      file = files[0]
-      putCache(shareFileCache, pwdId, file, SHARE_FILE_MAX)
+    if (!files) {
+      const list = await fetchShareFiles(pwdId, stoken, cookie, onProgress).catch(() => null)
+      if (!list || !list.length) return null
+      files = list
+      putCache(shareFileCache, pwdId, files, SHARE_FILE_MAX)
     }
-    if (!file.fid) return null
 
-    const dl = await signDownload(pwdId, stoken, file.fid, cookie).catch(() => null)
-    if (dl) {
-      return {
+    // 分享里可能有多个音频（不同音质），挨个签：一个不行换下一个
+    for (const f of files) {
+      if (!f.fid) continue
+      const dl = await signDownload(pwdId, stoken, f.fid, cookie).catch(() => null)
+      onProgress?.()
+      if (!dl) continue
+      const cand: QuarkDirect = {
         url: dl.url,
         cookie: dl.cookie,
-        fileName: file.fileName,
-        size: file.size || dl.size,
+        fileName: f.fileName,
+        size: f.size || dl.size,
+        durationSec: f.durationSec || dl.durationSec,
       }
+      // 签完先探一下：412 说明 Cookie 跟直链对不上，这条废了，换下一个文件/分享
+      const state = await probeSigned(dl.url, dl.cookie)
+      onProgress?.()
+      if (state === 'denied') {
+        // 留个底：全都被拒时还是把它给出去，让前端按老规矩重试，
+        // 别因为一次探测就把整首歌判成「没找到」
+        denied ??= cand
+        continue
+      }
+      return cand
     }
 
     // 签不出来：多半是 stoken/fid 过期了，把缓存作废，下一轮重来
     shareFileCache.delete(pwdId)
     stokenCache.delete(tk)
   }
-  return null
+  return denied
 }

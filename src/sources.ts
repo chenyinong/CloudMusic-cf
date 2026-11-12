@@ -19,8 +19,8 @@ import {
   probeAudio,
   seal,
 } from './util'
-import { ABSOLUTE_PARTIAL_MAX_SEC, artistHit, artistMatch, isVariant, keywords, sameTitle } from './match'
-import { quarkDirect } from './quark'
+import { ABSOLUTE_PARTIAL_MAX_SEC, artistHit, artistMatch, isVariant, keywords, sameTitle, titleLoose, tooShort } from './match'
+import { quarkDirect, verifyQuarkCookie } from './quark'
 
 const LMY = 'https://so.liumingye.cn'
 const NETEASE = 'https://music.163.com'
@@ -56,6 +56,8 @@ interface Cand {
   title: string
   fileName?: string
   total: number
+  /** 音源报出来的真实时长（秒），0 = 不知道 */
+  durationSec?: number
   /** 歌手跟要的不是一个（降级时用了别的歌手的版本） */
   mismatch?: boolean
 }
@@ -206,16 +208,36 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
   // ── 夸克优先 ──────────────────────────────────────────────────────────
   /** 夸克最后一次有进展的时间：卡住太久就交给公开源，进展中就一直等 */
   let quarkAt = Date.now()
+  /** 当前有几个夸克请求在飞：在飞的时候不算「没进展」 */
+  let quarkBusy = 0
   const touchQuark = () => {
     quarkAt = Date.now()
   }
-  /** 夸克候选：签发直链 + 用签发时带回来的文件大小判是不是试听片段（省一次探活往返）。 */
+  /**
+   * 包一层夸克请求。
+   *
+   * 「5 秒没进展就放弃」这个判断，必须把「正在等一个请求」和「真的卡住」分开：
+   * 下歌吧偶尔会慢到 5 秒以上（CF 边缘到国内音源），那时候其实是有进展的，
+   * 只是还没回来 —— 不然一慢就把整条夸克路判死，
+   * 「网盘里明明有这首歌」又会变成「夸克没找到」。
+   */
+  const busy = async <T>(fn: () => Promise<T>): Promise<T> => {
+    quarkBusy++
+    touchQuark()
+    try {
+      return await fn()
+    } finally {
+      quarkBusy--
+      touchQuark()
+    }
+  }
+  /** 夸克候选：签发直链 + 用签发时带回来的真实时长/文件大小判是不是试听片段。 */
   const quarkSign = async (h: LmyHit): Promise<Cand | null> => {
     const t0 = Date.now()
     touchQuark()
     let c: Cand | null = null
     try {
-      c = await quarkCandById(h.id, cookie)
+      c = await busy(() => quarkCandById(h.id, cookie, touchQuark))
     } catch (e) {
       notes.push(`夸克「${h.title}」签发失败（${errMsg(e)}，${Date.now() - t0}ms）`)
       touchQuark()
@@ -228,13 +250,14 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     }
     c.title = h.title
     const mb = (c.total / 1048576).toFixed(1)
-    if (quarkIsPartial(c.total, req.durationSec)) {
-      notes.push(`夸克「${h.title}」只有试听片段（${mb}MB，${Date.now() - t0}ms），继续找完整版`)
+    const fname = c.fileName ? `「${c.fileName}」` : ''
+    if (quarkIsPartial(c.total, c.durationSec ?? 0, req.durationSec)) {
+      notes.push(`夸克「${h.title}」${fname}只有试听片段（${mb}MB，${Date.now() - t0}ms），继续找完整版`)
       partialFallback ??= c
       touchQuark()
       return null
     }
-    notes.push(`夸克「${h.title}」拿到完整版（${mb}MB，${Date.now() - t0}ms）`)
+    notes.push(`夸克「${h.title}」${fname}拿到完整版（${mb}MB，${Date.now() - t0}ms）`)
     touchQuark()
     return c
   }
@@ -257,7 +280,7 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
       } else {
         c.title = req.title
         const mb = (c.total / 1048576).toFixed(1)
-        if (quarkIsPartial(c.total, req.durationSec)) {
+        if (quarkIsPartial(c.total, c.durationSec ?? 0, req.durationSec)) {
           notes.push(`夸克：指定资源只有试听片段（${mb}MB），改走搜索`)
         } else {
           notes.push(`夸克：指定资源「${c.fileName}」拿到完整版（${mb}MB）`)
@@ -265,45 +288,78 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
         }
       }
     }
-    const hits = await lmySearch(kws[0] ?? '')
-    touchQuark()
-    notes.push(`下歌吧：搜到 ${hits.length} 条`)
-    const same = hits.filter((h) => sameTitle(h.title, req.title))
-    // 下歌吧的 artist 写的是上传者，翻唱会写自己的名字 —— 歌手对得上的先试
-    const artistOk = (h: LmyHit) => !h.artist || artistHit(req.artist, h.artist)
-    // 先按歌手排序再取前三个：不然原唱排在第 6 位就被前三个翻唱挤掉了
-    const pool = (same.length ? same : hits)
-      .slice()
-      .sort(
-        (a, b) => Number(artistHit(req.artist, b.artist)) - Number(artistHit(req.artist, a.artist))
-      )
-      .slice(0, 3)
-    const strictPool = pool.filter(artistOk)
-    const loosePool = pool.filter((h) => !artistOk(h))
-    if (!pool.length) return null
-    const tCand = Date.now()
-    // 先签第一个：中了就收工，省掉另外两个候选的签发往返；
-    // 不中再把剩下的并行签，别一个个排队等
-    const signPool = async (list: LmyHit[]): Promise<Cand | null> => {
-      if (!list.length) return null
-      const first = await quarkSign(list[0])
-      if (first) return first
-      const rest = await Promise.all(list.slice(1).map(quarkSign))
-      return rest.find((c): c is Cand => !!c) ?? null
-    }
-    const strictHit = await signPool(strictPool)
-    if (strictHit) {
+    // ── 挨个关键词搜（跟安卓端一致）────────────────────────────────────
+    // 关键词顺序：纯歌名 → 歌名+歌手 → 原样歌名。
+    // 下歌吧对长关键词会直接 400，纯歌名反而最准，所以纯歌名排第一；
+    // 但纯歌名搜不到时必须换下一个词再试 —— 只搜一个词的话，
+    // 夸克网盘里明明有的歌会被判成「没找到」。
+    const merged = new Map<string, LmyHit>()
+    const tried = new Set<string>()
+    let failedKw = 0
+    for (const kw of kws) {
+      if (!kw) continue
+      let hits: LmyHit[] = []
+      try {
+        hits = await busy(() => lmySearch(kw))
+      } catch (e) {
+        // 一个词炸了不能把整条路拖死，后面的词还得试
+        failedKw++
+        notes.push(`下歌吧：关键词「${kw}」搜索失败（${errMsg(e)}）`)
+        touchQuark()
+        continue
+      }
+      touchQuark()
+      for (const h of hits) if (!merged.has(h.id)) merged.set(h.id, h)
+      notes.push(`下歌吧：关键词「${kw}」搜到 ${hits.length} 条（累计 ${merged.size} 条）`)
+
+      // 候选：歌名沾边 + 有夸克资源 + 原唱优先
+      let pool = pickQuarkCandidates(merged, req, tried)
+
+      // 这一页没有原唱 → 往后翻一页找（原唱常常排在 20 条之后，
+      // 只看第一页会把「网盘里明明有原唱」的歌判成没有）
+      if (!pool.some((h) => artistHit(req.artist, h.artist))) {
+        try {
+          const more = await busy(() => lmySearch(kw, 2))
+          touchQuark()
+          if (more.length) {
+            for (const h of more) if (!merged.has(h.id)) merged.set(h.id, h)
+            notes.push(`下歌吧：关键词「${kw}」第 2 页又搜到 ${more.length} 条（累计 ${merged.size} 条）`)
+            pool = pickQuarkCandidates(merged, req, tried)
+          }
+        } catch (e) {
+          notes.push(`下歌吧：关键词「${kw}」第 2 页搜索失败（${errMsg(e)}）`)
+          touchQuark()
+        }
+      }
+      if (!pool.length) continue
+
+      const tCand = Date.now()
+      // 先签第一个：中了就收工，省掉另外几个候选的签发往返；
+      // 不中再把剩下的并行签，别一个个排队等
+      const signPool = async (
+        list: LmyHit[]
+      ): Promise<{ cand: Cand; hit: LmyHit } | null> => {
+        if (!list.length) return null
+        const first = await quarkSign(list[0])
+        if (first) return { cand: first, hit: list[0] }
+        const rest = await Promise.all(
+          list.slice(1).map(async (h) => ({ cand: await quarkSign(h), hit: h }))
+        )
+        const ok = rest.find((r) => !!r.cand)
+        return ok && ok.cand ? { cand: ok.cand, hit: ok.hit } : null
+      }
+      const signed = await signPool(pool)
+      for (const h of pool) tried.add(h.id)
       notes.push(`下歌吧：候选签发共 ${Date.now() - tCand}ms`)
-      return { cand: strictHit, mismatch: false }
+      if (signed) {
+        // 命中的这条歌手跟要的不一样 → 这是别的歌手的版本，要标出来
+        const mismatch = !artistHit(req.artist, signed.hit.artist)
+        if (mismatch) notes.push('下歌吧里没有这首歌原唱的资源，这个是别的歌手的版本')
+        return { cand: signed.cand, mismatch }
+      }
+      // 这个关键词下的候选都不行 → 换下一个关键词继续试
     }
-    // 原唱那条拿不到，才退而求其次用别的歌手的版本（会标出来）
-    const looseHit = await signPool(loosePool)
-    notes.push(`下歌吧：候选签发共 ${Date.now() - tCand}ms`)
-    if (looseHit) {
-      looseHit.mismatch = true
-      notes.push('下歌吧里没有这首歌原唱的资源，这个是别的歌手的版本')
-      return { cand: looseHit, mismatch: true }
-    }
+    if (failedKw) notes.push(`下歌吧：${failedKw} 个关键词搜索失败`)
     return null
   })()
 
@@ -340,6 +396,7 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     QUARK_STALL_MS,
     QUARK_TOTAL_MS,
     () => quarkAt,
+    () => quarkBusy > 0,
     (why) => notes.push(`夸克：${why}（${QUARK_STALL_MS}ms 没进展），交给公开源`)
   )
   clearTimeout(publicTimer)
@@ -353,7 +410,7 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
   const [ne, kw] = await startPublic()
   notes.push(...ne.notes, ...kw.notes)
   // 明明登录了夸克却没走夸克，把原因告诉前端（别让人以为是没登录）
-  const fallback = req.skipQuark ? '夸克直链失效' : cookie ? '夸克没找到这首歌' : ''
+  const fallback = await quarkFallbackReason(req, cookie)
   for (const c of [...ne.cands, ...kw.cands]) {
     if ((await probe(c)) === 'ok') return done(c, false, false, fallback)
   }
@@ -521,7 +578,8 @@ async function collectKuwo(
       if (rids.length >= 2) break
     } else {
       // 歌手对不上的先存着，别急着停 —— 原唱可能排在后面
-      looseRids.push(rid)
+      // （最多存 3 个：每个都要探活一次，多了纯属拖慢响应）
+      if (looseRids.length < 3) looseRids.push(rid)
     }
   }
   notes.push(
@@ -576,24 +634,92 @@ interface LmyHit {
   id: string
   title: string
   artist: string
+  /** 音质列表，如 ["夸克MP3","夸克FLAC"]。带「夸克」的才有网盘分享 */
+  quality: string[]
 }
 
-async function lmySearch(kw: string): Promise<LmyHit[]> {
+/** 这条搜索结果有没有夸克网盘资源（quality 没写就当有，别误杀） */
+function hitHasQuark(h: LmyHit): boolean {
+  if (!h.quality.length) return true
+  return h.quality.some((q) => /夸克/.test(q))
+}
+
+/**
+ * 从合并后的搜索结果里挑值得签的候选。
+ *
+ * 顺序：歌名完全一样 > 歌名沾边；原唱 > 别的歌手的版本；非衍生版本 > 伴奏/DJ/翻唱；
+ * 音质高的靠前。签一个夸克直链要三个请求，挑错歌既慢又难听。
+ */
+function pickQuarkCandidates(
+  merged: Map<string, LmyHit>,
+  req: ResolveRequest,
+  tried: Set<string>
+): LmyHit[] {
+  const all = [...merged.values()].filter((h) => !tried.has(h.id))
+  // 歌名必须沾边：根本不是这首歌的别去签
+  const titled = all.filter((h) => titleLoose(h.title, req.title))
+  if (!titled.length) return []
+  // 有夸克网盘资源的排前面（一个都没有的话这条歌本来就下不了）
+  const withQ = titled.filter(hitHasQuark)
+  const pool = withQ.length ? withQ : titled
+  return pool
+    .slice()
+    .sort((a, b) => {
+      const t = Number(sameTitle(b.title, req.title)) - Number(sameTitle(a.title, req.title))
+      if (t) return t
+      const s = Number(artistHit(req.artist, b.artist)) - Number(artistHit(req.artist, a.artist))
+      if (s) return s
+      const v = Number(isVariant(a.title, a.artist)) - Number(isVariant(b.title, b.artist))
+      if (v) return v
+      return hitQualityRank(b) - hitQualityRank(a)
+    })
+    .slice(0, 4)
+}
+
+/** 搜索结果自带的音质排序（FLAC > WAV > MP3）。 */
+function hitQualityRank(h: LmyHit): number {
+  let best = 0
+  for (const q of h.quality) best = Math.max(best, qualityRank(q))
+  return best
+}
+
+/**
+ * 明明登录了夸克却没走夸克 —— 给前端一句人话。
+ *
+ * Cookie 失效时长得跟「网盘里没这首歌」一模一样（都是签不出直链），
+ * 先验一下登录态，别让人以为歌真的没有。
+ */
+async function quarkFallbackReason(req: ResolveRequest, cookie: string): Promise<string> {
+  if (req.skipQuark) return '夸克直链失效'
+  if (!cookie) return ''
+  const v = await verifyQuarkCookie(cookie).catch(() => ({ valid: null as boolean | null }))
+  if (v.valid === false) return '夸克登录已失效，重新登录试试'
+  return '夸克没找到这首歌'
+}
+
+async function lmySearch(kw: string, page = 1): Promise<LmyHit[]> {
   if (!kw) return []
-  const d = await getJson<any>(`${LMY}/api/music/search?q=${enc(kw)}`, LMY_HEADERS).catch(
-    () => null
+  // 失败要往上抛：外层按关键词兜异常，一个词炸了不能把整条路拖死
+  const d = await getJson<any>(
+    `${LMY}/api/music/search?q=${enc(kw)}${page > 1 ? `&page=${page}` : ''}`,
+    LMY_HEADERS
   )
-  return (d?.data ?? []).map((o: any) => ({
-    id: String(o.id ?? ''),
-    title: String(o.title ?? '').trim(),
-    artist: String(o.artist ?? '').trim(),
-  })).filter((h: LmyHit) => h.id && h.title)
+  return (d?.data ?? [])
+    .map((o: any) => ({
+      id: String(o.id ?? ''),
+      title: String(o.title ?? '').trim(),
+      artist: String(o.artist ?? '').trim(),
+      quality: (Array.isArray(o.quality) ? o.quality : [o.quality ?? ''])
+        .map((q: any) => String(q ?? '').trim())
+        .filter((q: string) => !!q),
+    }))
+    .filter((h: LmyHit) => h.id && h.title)
 }
 
 async function lmyDetail(
   id: string
 ): Promise<{ downloads: Array<{ url: string; quality: string }> } | null> {
-  const d = await getJson<any>(`${LMY}/api/music/${enc(id)}`, LMY_HEADERS).catch(() => null)
+  const d = await getJson<any>(`${LMY}/api/music/${enc(id)}`, LMY_HEADERS)
   if (!d) return null
   return {
     downloads: (d.downloads ?? []).map((o: any) => ({
@@ -604,26 +730,29 @@ async function lmyDetail(
 }
 
 /**
- * 下歌吧 id → 夸克分享链接。
- * 分享链接是死的（同一首歌永远是那一份网盘资源），缓存起来能省掉一次详情往返（~380ms）。
+ * 下歌吧 id → 这首歌的所有夸克分享（按音质从高到低）。
+ *
+ * 一条歌可能有多个分享（MP3 / FLAC / WAV），挨个试才对 ——
+ * 第一个分享失效（文件是数字、分享过期）不能就此放弃，否则整首歌被判死。
+ * 分享链接是死的（同一首歌永远是那一份网盘资源），缓存 6 小时省一次详情往返。
  */
 const LMY_SHARE_TTL = 6 * 60 * 60 * 1000
 const LMY_SHARE_NULL_TTL = 10 * 60 * 1000
 const LMY_SHARE_MAX = 500
-const lmyShareCache = new Map<string, { url: string | null; at: number }>()
+const lmyShareCache = new Map<string, { urls: string[]; at: number }>()
 
-async function lmyShareOf(id: string): Promise<string | null> {
+async function lmySharesOf(id: string): Promise<string[]> {
   const hit = lmyShareCache.get(id)
   if (hit) {
-    const ttl = hit.url ? LMY_SHARE_TTL : LMY_SHARE_NULL_TTL
-    if (Date.now() - hit.at < ttl) return hit.url
+    const ttl = hit.urls.length ? LMY_SHARE_TTL : LMY_SHARE_NULL_TTL
+    if (Date.now() - hit.at < ttl) return hit.urls
   }
   const detail = await lmyDetail(id)
-  if (!detail) return null
-  const share = detail.downloads
+  if (!detail) return []
+  const urls = detail.downloads
     .filter((x) => /pan\.quark\.cn\/s\//.test(x.url))
-    .sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality))[0]
-  const url = share?.url ?? null
+    .sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality))
+    .map((x) => x.url)
   if (lmyShareCache.size >= LMY_SHARE_MAX) {
     let oldestKey = ''
     let oldestAt = Infinity
@@ -635,26 +764,34 @@ async function lmyShareOf(id: string): Promise<string | null> {
     }
     if (oldestKey) lmyShareCache.delete(oldestKey)
   }
-  lmyShareCache.set(id, { url, at: Date.now() })
-  return url
+  lmyShareCache.set(id, { urls, at: Date.now() })
+  return urls
 }
 
-/** 下歌吧 id → 夸克直链候选（分享链接 → 签发直链）。 */
-async function quarkCandById(id: string, cookie: string): Promise<Cand | null> {
-  const share = await lmyShareOf(id)
-  if (!share) return null
-  const q = await quarkDirect(share, cookie).catch(() => null)
-  if (!q) return null
-  return {
-    url: q.url,
-    source: '夸克',
-    ref: QUARK_REFERER,
-    ua: UA_PC,
-    cookie: q.cookie,
-    title: '',
-    fileName: q.fileName,
-    total: q.size,
+/** 下歌吧 id → 夸克直链候选（挨个分享试，签出直链就算成功）。 */
+async function quarkCandById(
+  id: string,
+  cookie: string,
+  onProgress?: () => void
+): Promise<Cand | null> {
+  const shares = await lmySharesOf(id)
+  if (!shares.length) return null
+  for (const share of shares) {
+    const q = await quarkDirect(share, cookie, onProgress).catch(() => null)
+    if (!q) continue
+    return {
+      url: q.url,
+      source: '夸克',
+      ref: QUARK_REFERER,
+      ua: UA_PC,
+      cookie: q.cookie,
+      title: '',
+      fileName: q.fileName,
+      total: q.size,
+      durationSec: q.durationSec,
+    }
   }
+  return null
 }
 
 function qualityRank(q: string): number {
@@ -680,10 +817,18 @@ async function neteaseDirect(songId: string, signal?: AbortSignal): Promise<stri
 }
 
 /**
- * 夸克：签发直链时就知道文件多大，直接判是不是 30 秒试听片段，
+ * 夸克：签发直链时就知道文件多大、真实时长多少，直接判是不是试听片段，
  * 不用再发一次探活请求（省 ~180ms）。
+ *
+ * 有真实时长就按真实时长判（跟安卓端 tooShort 一个口径：短 40% 以上算片段），
+ * 别拿字节数瞎猜 —— 歌单里的时长不准时会把完整版误判成片段，
+ * 误判的后果是这首歌「明明网盘里有」却被判成没找到。
  */
-function quarkIsPartial(size: number, durationSec: number): boolean {
+function quarkIsPartial(size: number, realSec: number, durationSec: number): boolean {
+  if (realSec > 0) {
+    if (durationSec > 0) return tooShort(realSec, durationSec)
+    return realSec <= ABSOLUTE_PARTIAL_MAX_SEC
+  }
   if (size <= 0) return false
   if (bytesLookPartial(size, durationSec)) return true
   return durationSec <= 0 && size < ABSOLUTE_PARTIAL_MAX_SEC * BYTES_PER_SEC
@@ -693,12 +838,16 @@ function quarkIsPartial(size: number, durationSec: number): boolean {
  * 夸克整路的上限：
  *   · stallMs —— 多久没有任何进展就放弃（夸克还在慢慢跑就一直等，不误伤慢链路）
  *   · totalMs —— 整条路最多等多久（兜底，防止一直挂着）
+ *
+ * 有请求在飞的时候不看 stallMs —— 慢请求不是「卡住」，
+ * 否则下歌吧偶尔慢 5 秒就会把整条夸克路判死。
  */
 function withProgressCap<T>(
   p: Promise<T>,
   stallMs: number,
   totalMs: number,
   lastProgress: () => number,
+  isBusy: () => boolean,
   onTimeout: (why: string) => void
 ): Promise<T | null> {
   const t0 = Date.now()
@@ -706,7 +855,7 @@ function withProgressCap<T>(
     let settled = false
     const timer = setInterval(() => {
       if (settled) return
-      const stalled = Date.now() - lastProgress() > stallMs
+      const stalled = !isBusy() && Date.now() - lastProgress() > stallMs
       const over = Date.now() - t0 > totalMs
       if (!stalled && !over) return
       settled = true
