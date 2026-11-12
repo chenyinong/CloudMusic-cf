@@ -1,4 +1,4 @@
-const CACHE = 'cloudmusic-cf-v14'
+const CACHE = 'cloudmusic-cf-v16'
 /** 关键小文件：装 SW 时先缓存这些，又快又小，不拖慢激活 */
 const PRECACHE = [
   '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png',
