@@ -86,4 +86,8 @@ export interface ResolveRequest {
   cookie?: string
   /** 下歌吧 id（搜歌结果里的夸克条目）：直接用它取直链，别再搜一遍挑错文件 */
   quarkId?: string
+  /** 忽略服务器端的解析缓存，强制重新解析（直链失效后重试时用） */
+  fresh?: boolean
+  /** 这一轮先别用夸克（夸克直链反复失效时，退回公开源兜底） */
+  skipQuark?: boolean
 }

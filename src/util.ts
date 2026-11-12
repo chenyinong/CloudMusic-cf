@@ -24,11 +24,17 @@ export interface HttpOptions {
   body?: string
   redirect?: 'follow' | 'manual'
   timeoutMs?: number
+  /** 外部取消信号：夸克命中后，公开源（网易云/酷我）的请求就没必要继续跑了 */
+  signal?: AbortSignal
 }
 
 export async function http(url: string, opts: HttpOptions = {}): Promise<Response> {
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 9000)
+  if (opts.signal) {
+    if (opts.signal.aborted) ctl.abort()
+    else opts.signal.addEventListener('abort', () => ctl.abort(), { once: true })
+  }
   try {
     return await fetch(url, {
       method: opts.method ?? 'GET',
@@ -45,9 +51,10 @@ export async function http(url: string, opts: HttpOptions = {}): Promise<Respons
 export async function getText(
   url: string,
   headers: Record<string, string>,
-  timeoutMs = 9000
+  timeoutMs = 9000,
+  signal?: AbortSignal
 ): Promise<string> {
-  const r = await http(url, { headers, timeoutMs })
+  const r = await http(url, { headers, timeoutMs, signal })
   const t = await r.text()
   if (!r.ok) throw new Error(`HTTP ${r.status}：${t.slice(0, 120)}`)
   return t
@@ -56,9 +63,10 @@ export async function getText(
 export async function getJson<T>(
   url: string,
   headers: Record<string, string>,
-  timeoutMs = 9000
+  timeoutMs = 9000,
+  signal?: AbortSignal
 ): Promise<T> {
-  return JSON.parse(await getText(url, headers, timeoutMs)) as T
+  return JSON.parse(await getText(url, headers, timeoutMs, signal)) as T
 }
 
 /** 夸克签发直链时会刷新 __puus，CDN 只认新值，必须合并进本条直链的 Cookie。 */

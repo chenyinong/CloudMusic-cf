@@ -507,7 +507,7 @@ function setPlaylist(pl, idx) {
   playAt(idx)
 }
 
-async function playAt(i) {
+async function playAt(i, attempt = 0) {
   const pl = state.playlist
   if (!pl || !pl.tracks[i] || state.busy) return
   state.busy = true
@@ -525,6 +525,9 @@ async function playAt(i) {
       durationSec: t.durationSec,
       platformId: t.platformId,
       cookie: state.cookie,
+      // attempt 1 = 重新签发夸克；attempt 2 = 夸克反复不行，退回公开源
+      fresh: attempt > 0,
+      skipQuark: attempt >= 2,
     })
     showNotes(d.notes || [])
     if (!d.ok || !d.resolved) {
@@ -542,6 +545,12 @@ async function playAt(i) {
     )
     updateMediaSession(t)
   } catch (e) {
+    if (attempt < 2) {
+      // 直链可能已经失效（夸克换了令牌、CDN 抽风等）：先重新签一次夸克，还不行换公开源
+      setStatus(attempt === 0 ? '直链失效，正在重新解析…' : '夸克直链还是不行，换公开源…')
+      setTimeout(() => playAt(i, attempt + 1), 60)
+      return
+    }
     setStatus(`解析失败：${e.message}`)
   } finally {
     state.busy = false

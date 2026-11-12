@@ -601,7 +601,7 @@ function setPlaylist(pl, idx) {
 }
 let playToken = 0            // 连点时只认最后一次
 const prefetching = new Set()  // 正在预取的歌（防止同一首重复预取）
-async function playAt(i) {
+async function playAt(i, attempt = 0) {
   const pl = state.playlist
   if (!pl || !pl.tracks[i]) return
   const t = pl.tracks[i]
@@ -614,20 +614,22 @@ async function playAt(i) {
   renderLibrary()
   renderMini()
   try {
-    // 有缓存：不等网络，直接起播
-    const cached = resolvedGet(t)
+    // 有缓存：不等网络，直接起播（重试时跳过缓存，强制重新解析）
+    const cached = attempt ? null : resolvedGet(t)
     if (cached) {
-      startResolved(i, t, cached, true)
+      startResolved(i, t, cached, true, attempt)
     } else {
       toast('正在找完整版…')
       const d = await post('/api/resolve', {
         title: t.title, artist: t.artist, durationSec: t.durationSec,
         platformId: t.platformId, cookie: state.cookie, quarkId: t.quarkId,
+        // attempt 1 = 重新签发夸克；attempt 2 = 夸克反复不行，退回公开源
+        fresh: attempt > 0, skipQuark: attempt >= 2,
       })
       if (token !== playToken) return          // 已经点了别的歌，这次结果作废
       if (!d.ok || !d.resolved) { toast(d.error || '没找到可播放的音源'); return }
       resolvedPut(t, d.resolved)
-      startResolved(i, t, d.resolved, false)
+      startResolved(i, t, d.resolved, false, attempt)
     }
   } catch (e) {
     if (token !== playToken) return
@@ -643,7 +645,7 @@ async function playAt(i) {
   }
 }
 /** 拿到音源后起播 */
-function startResolved(i, t, resolved, fromCache) {
+function startResolved(i, t, resolved, fromCache, attempt) {
   state.resolved = resolved
   const myToken = playToken
   audio.src = resolved.url
@@ -660,6 +662,14 @@ function startResolved(i, t, resolved, fromCache) {
       resolvedDrop(t)
       toast('直链失效，正在重新解析…')
       setTimeout(() => playAt(i), 60)
+      return
+    }
+    if (attempt < 2) {
+      // 刚解析出来的直链也可能已经失效（夸克换了令牌、CDN 抽风等）：
+      // 先重新签一次夸克，还不行就退回公开源
+      resolvedDrop(t)
+      toast(attempt === 0 ? '直链失效，正在重新解析…' : '夸克直链还是不行，换公开源…')
+      setTimeout(() => playAt(i, attempt + 1), 60)
       return
     }
     toast('播放失败：' + (e.message || '直链可能已失效'))
