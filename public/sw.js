@@ -1,9 +1,10 @@
-const CACHE = 'cloudmusic-cf-v12'
+const CACHE = 'cloudmusic-cf-v13'
+/** 关键小文件：装 SW 时先缓存这些，又快又小，不拖慢激活 */
 const PRECACHE = [
-  '/', '/app.js', '/style.css', '/cover.js',
-  '/m.html', '/m.css', '/m.js',
-  '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/manifest.webmanifest',
+  '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png',
 ]
+/** 应用外壳：激活时后台缓存，最多等 3 秒 */
+const SHELL = ['/', '/app.js', '/style.css', '/cover.js', '/m.html', '/m.css', '/m.js']
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -13,6 +14,13 @@ self.addEventListener('install', (e) => {
       // （addAll 一失败 SW 就装不上，Chrome 会判定站点「不可安装」，
       //   点「添加到主屏幕」就没反应）
       await Promise.all(PRECACHE.map((u) => c.add(u).catch(() => {})))
+      // 应用外壳放后台缓存，且最多等 3 秒：
+      // 网络慢的设备如果卡在 installing 状态，Chrome 不会给「安装」入口
+      //（Chrome 要求页面被一个「已激活」的 SW 接管才会弹安装框）
+      await Promise.race([
+        Promise.all(SHELL.map((u) => c.add(u).catch(() => {}))),
+        new Promise((r) => setTimeout(r, 3000)),
+      ])
       await self.skipWaiting()
     })()
   )

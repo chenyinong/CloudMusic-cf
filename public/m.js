@@ -1431,8 +1431,16 @@ $('#set-clear').addEventListener('click', () => {
 })
 $('#set-desktop').addEventListener('click', () => { sessionStorage.setItem('cm.desktop', '1'); location.href = '/' })
 
-/* ══════════ 添加到主屏幕（PWA 安装） ══════════ */
+/* ══════════ 添加到主屏幕（PWA 安装） ══════════
+ * Chrome 的安装入口（beforeinstallprompt）坑不少：
+ *   1) 事件只能触发一次，用户取消后本页再也不会有第二次；
+ *   2) prompt() 用过了 / 没有用户手势，会抛 InvalidStateError / NotAllowedError；
+ *   3) 页面还没被 Service Worker 接管时，Chrome 干脆不给这个事件；
+ *   4) 刚卸载完 PWA，系统里可能还留着安装记录，Chrome 会压一阵子安装框。
+ * 所以这一段的目标是：任何一步失败都能指出「下一步点哪里」，而不是让按钮装死。
+ */
 const PWA_INSTALLED_KEY = 'cm.pwa.installed'
+const PWA_RETRY_KEY = 'cm.pwa.retry'     // sessionStorage：刷新后准备再装一次
 let installPrompt = null
 let promptReady = false            // 浏览器是否给过「安装」入口（可安装才给）
 function isStandalone() {
@@ -1440,14 +1448,33 @@ function isStandalone() {
     window.matchMedia('(display-mode: fullscreen)').matches ||
     navigator.standalone === true
 }
+/** 系统里到底装没装：问得到就问（getInstalledRelatedApps），问不到就退回本机标记 */
+async function detectInstalled() {
+  if (isStandalone()) return { installed: true, certain: true }
+  if ('getInstalledRelatedApps' in navigator) {
+    try {
+      const apps = await navigator.getInstalledRelatedApps()
+      if (Array.isArray(apps)) {
+        const hit = apps.some((a) => !a.url || a.url.startsWith(location.origin))
+        return { installed: hit, certain: true }
+      }
+    } catch { /* 有的 ROM 不支持这个 API，忽略 */ }
+  }
+  return { installed: !!localStorage.getItem(PWA_INSTALLED_KEY), certain: false }
+}
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault()
   installPrompt = e
   promptReady = true
+  if (sessionStorage.getItem(PWA_RETRY_KEY)) {
+    sessionStorage.removeItem(PWA_RETRY_KEY)
+    toast('浏览器已给出安装入口，回到「设置 → 应用」再点一次「添加到主屏幕」')
+  }
   renderInstallState()
 })
 window.addEventListener('appinstalled', () => {
   installPrompt = null
+  promptReady = false
   localStorage.setItem(PWA_INSTALLED_KEY, String(Date.now()))
   toast('安装完成！图标在「应用抽屉」里搜「云音乐」，长按可拖到桌面')
   renderInstallState()
@@ -1455,26 +1482,81 @@ window.addEventListener('appinstalled', () => {
 $('#set-install').addEventListener('click', async () => {
   if (isStandalone()) { toast('已经在主屏幕应用里运行了'); return }
   if (installPrompt) {
-    installPrompt.prompt()
-    const r = await installPrompt.userChoice
-    installPrompt = null
-    if (r?.outcome === 'accepted') toast('正在安装…装好后在「应用抽屉」找「云音乐」')
-    else toast('已取消添加')
+    try {
+      await installPrompt.prompt()
+      const r = await installPrompt.userChoice
+      installPrompt = null
+      promptReady = false
+      if (r?.outcome === 'accepted') toast('正在安装…装好后在「应用抽屉」找「云音乐」')
+      else {
+        sessionStorage.setItem(PWA_RETRY_KEY, '1')
+        toast('已取消。点「重新检测安装状态」刷新页面后再试一次')
+      }
+      renderInstallState()
+    } catch (err) {
+      // 事件已经用过（InvalidStateError）或没有用户手势（NotAllowedError）
+      installPrompt = null
+      promptReady = false
+      sessionStorage.setItem(PWA_RETRY_KEY, '1')
+      toast('安装框没弹出来（' + (err?.name || '未知错误') + '）。点「重新检测安装状态」刷新后再试')
+      renderInstallState()
+    }
     return
   }
-  // 没拿到安装事件（部分国产 ROM / 定制浏览器不触发）：只能走 Chrome 自己的菜单
-  toast('请点浏览器右上角菜单 → 添加到主屏幕 / 安装应用')
+  // 没有可用的安装事件：先自检，把卡住的原因说出来
+  const why = await checkInstallable()
+  if (why) { toast(why); renderInstallState(); return }
+  sessionStorage.setItem(PWA_RETRY_KEY, '1')
+  toast('正在重新检测…刷新页面后再点一次「添加到主屏幕」')
+  setTimeout(() => location.reload(), 700)
 })
 // 已经是 App 形态就隐藏这一行
 if (isStandalone()) $('#set-install').hidden = true
+$('#set-install-recheck').addEventListener('click', () => {
+  sessionStorage.setItem(PWA_RETRY_KEY, '1')
+  location.reload()
+})
+/** 可安装性自检：返回空串 = 各项条件都满足；否则返回卡住的原因 */
+async function checkInstallable() {
+  if (!window.isSecureContext) return '⚠ 不是 HTTPS，Chrome 不允许安装'
+  const link = document.querySelector('link[rel=manifest]')
+  if (!link) return '⚠ 页面里缺少 link rel=manifest'
+  let mf = null
+  try {
+    const r = await fetch(link.href, { cache: 'no-store' })
+    if (!r.ok) return `⚠ manifest 取不到（HTTP ${r.status}）`
+    mf = await r.json()
+  } catch (e) { return '⚠ manifest 取不到：' + e.message }
+  if (!mf.start_url) return '⚠ manifest 里没有 start_url'
+  if (!Array.isArray(mf.icons) || !mf.icons.length) return '⚠ manifest 里没有图标'
+  for (const ic of mf.icons.slice(0, 3)) {
+    try {
+      const r = await fetch(new URL(ic.src, link.href).toString(), { cache: 'no-store' })
+      if (!r.ok) return `⚠ 图标 ${ic.src} 取不到（HTTP ${r.status}）`
+    } catch (e) { return `⚠ 图标 ${ic.src} 取不到：${e.message}` }
+  }
+  if (!('serviceWorker' in navigator)) return '⚠ 这个浏览器不支持 Service Worker'
+  let reg = null
+  try { reg = await navigator.serviceWorker.getRegistration() } catch { /* 忽略 */ }
+  if (!reg) return '⚠ Service Worker 没注册上，刷新一次页面'
+  if (!reg.active) return '⚠ Service Worker 还没激活，刷新一次页面'
+  if (!navigator.serviceWorker.controller) return '⚠ 页面还没被 Service Worker 接管，刷新一次页面'
+  return ''
+}
 /** 安装状态自检：让用户一眼看出是「没部署/没 HTTPS/SW 没就绪」还是「已装好」 */
 async function renderInstallState() {
   const el = $('#set-install-state')
   if (!el) return
-  const installed = !!localStorage.getItem(PWA_INSTALLED_KEY)
   const bits = []
   bits.push(isStandalone() ? '已在主屏幕 App 中运行' : '当前在浏览器中运行')
-  if (installed) bits.push('✓ 本机已安装（图标在应用抽屉里）')
+  const det = await detectInstalled()
+  if (det.installed) {
+    bits.push(det.certain ? '✓ 本机已安装（图标在应用抽屉里）' : '本机装过（应用抽屉里没图标就是已被系统清掉）')
+  } else {
+    bits.push('尚未安装到主屏幕')
+    // 问得出来却没装 → 之前那个「已安装」标记作废（卸载后标记还留着）
+    if (det.certain && localStorage.getItem(PWA_INSTALLED_KEY)) localStorage.removeItem(PWA_INSTALLED_KEY)
+  }
   if ('serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.getRegistration()
@@ -1484,7 +1566,9 @@ async function renderInstallState() {
     bits.push('浏览器不支持离线缓存')
   }
   if (!window.isSecureContext) bits.push('⚠ 非 HTTPS，无法安装')
-  else if (!promptReady && !installed) bits.push('⚠ 浏览器没弹出安装框，请用 Chrome 菜单 → 添加到主屏幕')
+  else if (!promptReady && !isStandalone()) {
+    bits.push('⚠ 浏览器暂时没给安装框：点「重新检测安装状态」刷新后再试，或用 Chrome 菜单 → 安装应用')
+  }
   el.textContent = bits.join(' · ')
 }
 
@@ -1498,9 +1582,12 @@ $('#set-diag').addEventListener('click', async () => {
   lines.push('manifest: ' + (document.querySelector('link[rel=manifest]')?.href || '无'))
   lines.push('浏览器给出安装入口: ' + promptReady)
   lines.push('本机已安装标记: ' + (localStorage.getItem(PWA_INSTALLED_KEY) || '无'))
+  const det = await detectInstalled()
+  lines.push('系统已装 WebAPK: ' + det.installed + '（确定=' + det.certain + '）')
+  lines.push('可安装性自检: ' + ((await checkInstallable()) || '各项条件正常'))
   try {
     const reg = await navigator.serviceWorker.getRegistration()
-    lines.push('SW: ' + (reg ? `scope=${reg.scope} active=${!!reg.active} state=${reg.active && reg.active.state}` : '未注册'))
+    lines.push('SW: ' + (reg ? `scope=${reg.scope} active=${!!reg.active} state=${reg.active && reg.active.state} 已接管=${!!navigator.serviceWorker.controller}` : '未注册'))
   } catch (e) { lines.push('SW: 查询失败 ' + e.message) }
   for (const u of ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/sw.js']) {
     try {
@@ -1758,6 +1845,13 @@ if ('serviceWorker' in navigator) {
   if (dev) {
     navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister().catch(() => {})))
   } else {
-    navigator.serviceWorker.register('/sw.js').catch(() => {})
+    // updateViaCache: 'none' —— sw.js 永远不过 HTTP 缓存，
+    // 免得浏览器拿旧 SW 去判定「可安装」，装不上还找不到原因
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .then(() => navigator.serviceWorker.ready)
+      .then(() => renderInstallState())   // SW 激活后重算一次安装状态
+      .catch(() => {})
+    // SW 接管页面后 Chrome 才肯给安装入口，接管了再刷新一次状态
+    navigator.serviceWorker.addEventListener('controllerchange', () => renderInstallState())
   }
 }
