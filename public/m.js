@@ -332,18 +332,17 @@ function renderPlists() {
         <div class="pli-title">${esc(p.name)}</div>
         <div class="pli-sub">${esc(p.platform === 'qq' ? 'QQ 音乐' : '网易云')} · ${p.count || 0} 首 · ${p.synced ? '云端' : '本机'}</div>
       </div>
-      <button class="pli-act" data-act="open" data-id="${esc(p.id)}">打开</button>
       <button class="pli-act danger" data-act="del" data-id="${esc(p.id)}">删除</button>
     </div>`).join('')
   root.querySelectorAll('.pli-cover').forEach((el) => {
     const p = state.plists.find((x) => x.id === el.parentElement.dataset.id)
     if (p) el.style.backgroundImage = `url("${CoverArt.generated(p.name)}")`
   })
-  root.querySelectorAll('[data-act]').forEach((b) =>
+  // 整行点击即打开歌单，这里只留「删除」
+  root.querySelectorAll('[data-act="del"]').forEach((b) =>
     b.addEventListener('click', (e) => {
       e.stopPropagation()
-      if (b.dataset.act === 'open') openPlaylist(b.dataset.id)
-      else deletePlaylist(b.dataset.id)
+      deletePlaylist(b.dataset.id)
     }))
   root.querySelectorAll('.pli').forEach((el) =>
     el.addEventListener('click', () => openPlaylist(el.dataset.id)))
@@ -839,21 +838,42 @@ function renderQuarkState() {
   $('#set-cookie').value = state.cookie
 }
 /* ══════════ 夸克 Cookie 云端同步 ══════════ */
-/** 保存本机 Cookie 并记下时间戳（用来和云端比新旧） */
+/**
+ * 保存本机 Cookie。
+ * cm.cookieAt 存「云端时间戳」：0 表示这份 Cookie 还没同步过（时间未知）。
+ * 不用手机本地时间做比较——手机时钟不准时会把云端旧值当新的，导致刚扫的码被覆盖。
+ */
 function saveCookieLocal(cookie) {
   state.cookie = cookie || ''
   localStorage.setItem('cm.cookie', state.cookie)
-  localStorage.setItem('cm.cookieAt', String(Date.now()))
+  localStorage.setItem('cm.cookieAt', '0')
 }
-/** 把本机 Cookie 上传云端（覆盖旧的）；返回是否成功 */
+/** 把本机 Cookie 上传云端（覆盖旧的）；成功后用服务端时间戳做新旧比较 */
 async function uploadCookie() {
   if (!state.account?.token || !state.cookie) return false
   try {
-    await api('/api/settings/quark', { method: 'POST', body: { cookie: state.cookie } })
+    const d = await api('/api/settings/quark', { method: 'POST', body: { cookie: state.cookie } })
+    if (d?.updatedAt) localStorage.setItem('cm.cookieAt', String(d.updatedAt))
     return true
   } catch { return false }
 }
-/** 登录后把云端 Cookie 取回来：谁新用谁；本机更新就回写覆盖云端 */
+/** 采用云端 Cookie（并记下云端时间戳） */
+function applyCloudCookie(cloud, cloudAt) {
+  state.cookie = cloud
+  localStorage.setItem('cm.cookie', cloud)
+  localStorage.setItem('cm.cookieAt', String(cloudAt || Date.now()))
+  renderQuarkState()
+  toast('已从云端恢复夸克 Cookie')
+}
+/** 问服务端这份 Cookie 还能不能用；true = 已失效，判断不出返回 false */
+async function cloudCookieDead(cookie) {
+  if (!state.account?.token || !cookie) return false
+  try {
+    const d = await api('/api/settings/quark/check', { method: 'POST', body: { cookie } })
+    return d?.valid === false
+  } catch { return false }
+}
+/** 登录后对齐云端 Cookie：本机刚拿到的优先，其余按服务端时间戳比新旧 */
 async function syncCookieFromCloud() {
   if (!state.account?.token) return
   try {
@@ -864,18 +884,23 @@ async function syncCookieFromCloud() {
       if (state.cookie) await uploadCookie()   // 云端没有、本机有 → 传上去
       return
     }
-    const localAt = Number(localStorage.getItem('cm.cookieAt') || 0)
-    if (localAt > cloudAt && state.cookie && state.cookie !== cloud) {
-      await uploadCookie()                     // 本机是新的 → 覆盖云端
+    if (!state.cookie) { applyCloudCookie(cloud, cloudAt); return }
+    if (state.cookie === cloud) {
+      if (!Number(localStorage.getItem('cm.cookieAt') || 0)) await uploadCookie()  // 补一个云端时间戳
       return
     }
-    if (state.cookie !== cloud) {
-      state.cookie = cloud
-      localStorage.setItem('cm.cookie', cloud)
-      localStorage.setItem('cm.cookieAt', String(cloudAt || Date.now()))
-      renderQuarkState()
-      toast('已从云端恢复夸克 Cookie')
+    const localAt = Number(localStorage.getItem('cm.cookieAt') || 0)
+    if (!localAt || localAt > cloudAt) {
+      // 本机这份更新（或时间未知）→ 覆盖云端，别让云端旧值盖掉刚扫到的码
+      if (await uploadCookie()) toast('本机夸克 Cookie 已同步到云端')
+      return
     }
+    if (await cloudCookieDead(cloud)) {
+      // 云端这份已经失效（别人换设备登过、或 Cookie 过期）→ 保住本机这份并回写云端
+      if (await uploadCookie()) toast('云端夸克 Cookie 已失效，已改用本机')
+      return
+    }
+    applyCloudCookie(cloud, cloudAt)           // 云端更新 → 用云端的
   } catch { /* 云端取不到就继续用本机的 */ }
 }
 
@@ -1111,7 +1136,8 @@ $('#set-desktop').addEventListener('click', () => { sessionStorage.setItem('cm.d
 
 // 登录页
 $('#l-enter').addEventListener('click', async () => {
-  saveCookieLocal($('#l-cookie').value.trim())
+  const c = $('#l-cookie').value.trim()
+  if (c) saveCookieLocal(c)          // 空值不清掉已有 Cookie（清空请到设置页）
   localStorage.setItem('cm.loggedIn', '1')
   showApp()
   if (state.account?.token) await uploadCookie()

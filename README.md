@@ -48,7 +48,7 @@ Cloudflare Workers + PWA 版「云音乐」。导入 QQ 音乐 / 网易云歌单
 - **账号登录**：用管理员在后台创建的用户名 + 密码登录；移动版可在**登录页直接登录**，登录后进入主界面。
 - **导入即同步**：登录状态下导入歌单，会自动存进 Cloudflare D1，不需要再手动点保存；未登录时只存本机，登录后自动补传。
 - **歌单集合**：登录后自动把云端歌单拉回「我的歌单」列表；点列表项打开（云端歌单按需拉取曲目），删除会同时删掉云端那条。
-- **夸克 Cookie 云端同步**：登录后本机 Cookie 会自动上传 D1（**AES-GCM 加密后存储**），换设备登录即可直接取回；扫码或手动换了新 Cookie 会覆盖云端旧值。两端同时存在时按「谁新用谁」自动取舍（本机带时间戳 `cm.cookieAt`，云端带 `updatedAt`）。
+- **夸克 Cookie 云端同步**：登录后本机 Cookie 会自动上传 D1（**AES-GCM 加密后存储**），换设备登录即可直接取回；扫码或手动换了新 Cookie 会覆盖云端旧值。两端同时存在时按「谁新用谁」自动取舍：比较**统一用服务端时间戳**（手机时钟不准不会误判），本机这份还没同步过就以本机为准。云端那份若已失效（别人换设备登过、Cookie 过期），会先验一次有效性，失效就保住本机这份并回写云端，不会把「明明登录了」的状态冲掉。
 - **后台管理** `/admin.html`：管理员密码登录（默认 `admin888`，可用 `ADMIN_PASSWORD` secret 覆盖），可添加 / 删除用户、查看用户列表。
 - **收藏云端同步**：登录后收藏（小红心）自动上云，换设备登录即可看到；多设备按 key 合并，云端被取消的收藏会同步删掉本机那条（软删除留墓碑，避免旧设备把歌「复活」）。没登录时收藏只存本机。
 - 每个用户只能看到自己的歌单，删除用户会连带删掉其全部歌单。
@@ -210,6 +210,7 @@ wrangler.toml     Workers 配置
 | `DELETE /api/playlists/:id` | — | 删除歌单 |
 | `GET /api/settings/quark` | — | 云端夸克 Cookie：`{ hasCookie, cookie?, updatedAt }` |
 | `POST /api/settings/quark` | `{ cookie }` | 保存（覆盖）云端夸克 Cookie，返回 `{ ok, updatedAt }`；传空串等于清除 |
+| `POST /api/settings/quark/check` | `{ cookie }` | 验一份 Cookie 还能不能用：`{ valid: true/false/null }`（null = 判断不出） |
 | `DELETE /api/settings/quark` | — | 清除云端夸克 Cookie |
 | `GET /api/favorites` | — | 云端收藏列表：`[{ key, track, deleted, createdAt, updatedAt }]` |
 | `POST /api/favorites` | `{ key, track }` | 收藏一首（幂等），重新收藏会清掉取消标记 |

@@ -1,6 +1,7 @@
 import type { Env, ResolveRequest, StreamPayload } from './types'
 import { fetchPlaylist, resolveRef, searchTracks } from './playlist'
 import { pollLogin, startLogin } from './quark-login'
+import { verifyQuarkCookie } from './quark'
 import { fetchCover } from './cover'
 import { qrSvg } from './qr'
 import { resolveTrack } from './sources'
@@ -282,6 +283,14 @@ export default {
       const plain = await unseal<{ c?: string }>(row.quark_cookie, env.STREAM_SECRET)
       if (!plain?.c) return json({ hasCookie: false, updatedAt: 0 })
       return json({ hasCookie: true, cookie: plain.c, updatedAt: row.updated_at })
+    }
+    // 单独验一份 Cookie 还有效没有（只在两台设备冲突时才调用，不拖慢登录）
+    if (url.pathname === '/api/settings/quark/check' && request.method === 'POST') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const b = (await request.json().catch(() => ({}))) as { cookie?: string }
+      const v = await verifyQuarkCookie((b.cookie ?? '').trim())
+      return json({ valid: v.valid, account: v.account || '' })
     }
     if (url.pathname === '/api/settings/quark' && request.method === 'POST') {
       const uid = await requireUser(request)

@@ -17,6 +17,7 @@ import {
 } from './util'
 
 const HOST = 'https://drive-pc.quark.cn'
+const PAN = 'https://pan.quark.cn'
 const AUDIO_EXT = /\.(mp3|flac|wav|m4a|aac|ogg|ape)$/i
 
 export interface QuarkDirect {
@@ -40,6 +41,36 @@ export function pwdIdOf(share: string): string | null {
   if (m) return m[1]
   const s = share.trim()
   return /^[A-Za-z0-9]{8,20}$/.test(s) ? s : null
+}
+
+/**
+ * 检查夸克 Cookie 是否还有效。
+ * valid = true/false 是明确结论；null 表示判断不出来（网络异常、接口返回异常），
+ * 这时前端应保持原有逻辑，不要因为「判断不出」就覆盖本机 Cookie。
+ */
+export async function verifyQuarkCookie(
+  cookie: string
+): Promise<{ valid: boolean | null; account: string }> {
+  if (!cookie || !cookie.includes('__pus')) return { valid: false, account: '' }
+  try {
+    const r = await http(`${PAN}/account/info`, {
+      headers: { 'User-Agent': UA_PC, Referer: 'https://pan.quark.cn/', Cookie: cookie },
+      timeoutMs: 5000,
+    })
+    if (r.status === 401 || r.status === 403) return { valid: false, account: '' }
+    if (!r.ok) return { valid: null, account: '' }
+    const j = (await r.json().catch(() => null)) as any
+    if (!j) return { valid: null, account: '' }
+    const nickname = String(j?.data?.member?.nickname ?? j?.data?.nickname ?? '')
+    if (nickname) return { valid: true, account: nickname }
+    const code = j?.code ?? j?.status
+    if (code !== undefined && code !== null && Number(code) !== 0) {
+      return { valid: false, account: '' }
+    }
+    return { valid: true, account: nickname }
+  } catch {
+    return { valid: null, account: '' }
+  }
 }
 
 function quality(name: string): number {
