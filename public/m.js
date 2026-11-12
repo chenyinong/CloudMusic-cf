@@ -575,7 +575,7 @@ function updateMediaSession(t) {
 }
 
 /* ══════════ 歌词 ══════════ */
-function parseLrc(text) {
+function parseLrc(text, durationSec) {
   if (!text) return []
   const out = []
   const re = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
@@ -590,7 +590,55 @@ function parseLrc(text) {
       out.push({ time: Number(t[1]) * 60 + Number(t[2]) + (t[3] ? Number(t[3].padEnd(3, '0')) / 1000 : 0), text: txt })
     }
   }
-  return out.sort((a, b) => a.time - b.time)
+  if (out.length) return out.sort((a, b) => a.time - b.time)
+  // 没有时间轴的纯文本歌词 → 按歌曲时长把每行均分成时间轴，照样能跟着歌滚
+  return plainLrcToTimed(text, durationSec)
+}
+/** 纯文本歌词 → 估算时间轴。 */
+function plainLrcToTimed(text, durationSec) {
+  const META = /^(词|曲|编曲|制作人|混音|监制|出品|发行|录音|母带|和声|吉他|贝斯|鼓|弦乐|出品公司|发行公司)\s*[:：]/
+  const body = String(text).split('\n')
+    .map((s) => s.replace(/\[[a-z]+:.*?\]/gi, '').trim())
+    .filter((s) => s && !META.test(s))
+  if (!body.length) return []
+  const total = durationSec > 0 ? durationSec : body.length * 4
+  const step = total / body.length
+  return body.map((t, i) => ({ time: i * step, text: t }))
+}
+/* 歌词缓存：本机存一份，切回来不用再问服务器 */
+const LYRIC_CACHE_MAX = 300
+function lyricCacheKey(t) { return 'cm.lyric.' + coverKey(t) }
+function lyricCacheGet(t) {
+  try {
+    const raw = localStorage.getItem(lyricCacheKey(t))
+    if (!raw) return null
+    const o = JSON.parse(raw)
+    if (!o || !o.lyric) return null
+    const lines = parseLrc(o.lyric, t.durationSec)
+    return lines.length ? { lines, plain: !!o.plain } : null
+  } catch { return null }
+}
+function lyricCachePut(t, lyric, plain) {
+  try {
+    const k = lyricCacheKey(t)
+    localStorage.setItem(k, JSON.stringify({ lyric, plain: !!plain, at: Date.now() }))
+    const idx = loadJSON('cm.lyricKeys') || []
+    const next = [k, ...idx.filter((x) => x !== k)].slice(0, LYRIC_CACHE_MAX)
+    saveJSON('cm.lyricKeys', next)
+    for (const old of idx.slice(LYRIC_CACHE_MAX)) localStorage.removeItem(old)
+  } catch { /* 配额满了就算了 */ }
+}
+function lyricCacheDrop(t) {
+  try { localStorage.removeItem(lyricCacheKey(t)) } catch { /* 忽略 */ }
+}
+/** 纯文本歌词没有时间轴，行距是按歌曲长度估算的，标一下免得用户以为错位 */
+function markPlainLyric() {
+  const inner = $('#pp-lyric-inner')
+  if (!inner || inner.querySelector('.pp-lyric-tip')) return
+  const tip = document.createElement('div')
+  tip.className = 'pp-lyric-tip'
+  tip.textContent = '这份歌词没有时间轴，行距按歌曲长度估算'
+  inner.prepend(tip)
 }
 function paintLyric(lines) {
   const inner = $('#pp-lyric-inner')
@@ -610,15 +658,26 @@ async function ensureLyric() {
   lyricKey = coverKey(t)
   const inner = $('#pp-lyric-inner')
   if (!state.onlineLyric) { inner.innerHTML = '<div class="pp-lyric-none">已关闭在线歌词</div>'; return }
+  // 本机有缓存就直接用
+  const cached = lyricCacheGet(t)
+  if (cached) {
+    lyricLines = cached.lines
+    lyricActive = -1
+    paintLyric(lyricLines)
+    if (cached.plain) markPlainLyric()
+    return
+  }
   inner.innerHTML = '<div class="pp-lyric-loading">歌词加载中…</div>'
   try {
     const d = await post('/api/lyric', {
       title: t.title, artist: t.artist, platform: t.platform, platformId: t.platformId,
     })
     if (lyricKey !== coverKey(t)) return
-    lyricLines = parseLrc(d.lyric)
+    lyricLines = parseLrc(d.lyric, t.durationSec)
     lyricActive = -1
     paintLyric(lyricLines)
+    if (d.plain) markPlainLyric()
+    if (d.lyric) lyricCachePut(t, d.lyric, d.plain)
   } catch { inner.innerHTML = '<div class="pp-lyric-none">歌词获取失败</div>' }
 }
 function highlightLyric() {
@@ -827,10 +886,12 @@ async function runManualLyric() {
   inner.innerHTML = '<div class="pp-lyric-loading">歌词加载中…</div>'
   try {
     const d = await post('/api/lyric', { title, artist })
-    lyricLines = parseLrc(d.lyric)
+    lyricLines = parseLrc(d.lyric, current()?.durationSec)
     lyricActive = -1
     lyricKey = coverKey(current())
     paintLyric(lyricLines)
+    if (d.plain) markPlainLyric()
+    if (d.lyric && current()) lyricCachePut(current(), d.lyric, d.plain)
   } catch { inner.innerHTML = '<div class="pp-lyric-none">歌词获取失败</div>' }
 }
 
@@ -1508,7 +1569,11 @@ $('#sheet').addEventListener('click', (e) => {
     case 'sleep30': setSleep('time', 30); break
     case 'sleep60': setSleep('time', 60); break
     case 'sleeptrack': setSleep('track'); break
-    case 'relyric': lyricKey = ''; lyricLines = []; ensureLyric(); break
+    case 'relyric': {
+      const c = current()
+      if (c) lyricCacheDrop(c)
+      lyricKey = ''; lyricLines = []; ensureLyric(); break
+    }
     case 'searchlyric': {
       const c = current()
       $('#ls-title').value = c?.title || ''

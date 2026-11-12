@@ -242,6 +242,7 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
   overflow: hidden; display: grid; place-items: center;
   color: #fff; font-size: 20px; font-weight: 600;
   background: var(--surface-2);
+  box-shadow: none;
 }
 .song-cover img { width: 100%; height: 100%; object-fit: cover; }
 .song-playing {
@@ -273,6 +274,7 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
   width: 40px; height: 40px; border-radius: 50%; flex: none; overflow: hidden;
   display: grid; place-items: center; color: #fff; font-size: 18px;
   background: linear-gradient(140deg, #8b7bf0, #4a7bf0);
+  box-shadow: none;
 }
 .mini-cover img { width: 100%; height: 100%; object-fit: cover; }
 .mini-cover.spin { animation: spin 12s linear infinite; animation-play-state: running; }
@@ -353,7 +355,7 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
   border-radius: 26px; overflow: hidden; display: grid; place-items: center;
   color: #fff; font-size: 64px; font-weight: 600;
   background: linear-gradient(145deg, #8b7bf0, #4a7bf0);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, .08);
+  box-shadow: none;
 }
 .pp-cover-card img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .pp-cover-fade {
@@ -361,6 +363,10 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
   background: linear-gradient(180deg, rgba(0,0,0,.22), transparent 35%, transparent 62%, rgba(0,0,0,.30));
 }
 .pp-cover-index { position: absolute; right: 20px; bottom: 20px; z-index: 1; font-size: 11px; letter-spacing: 1.5px; }
+.pp-lyric-tip {
+  font-size: 11px; color: var(--muted); opacity: .75; letter-spacing: .2px;
+  margin: 0 0 20px; text-align: center;
+}
 .pp-lyric-inner {
   width: 100%; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch;
   text-align: center; line-height: 2.3; font-size: 16px; padding: 42% 0;
@@ -436,6 +442,7 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .pli-cover {
   width: 52px; height: 52px; border-radius: 12px; flex: none;
   background-size: cover; background-position: center;
+  box-shadow: none;
 }
 .pli-main { flex: 1; min-width: 0; }
 .pli-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

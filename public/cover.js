@@ -1,6 +1,7 @@
 /* 封面视觉工具（移动版 / 桌面版共用）
  * 对齐安卓 CoverArt.kt 的 GeneratedCover 与 Components.kt 的 coverColors：
- * 查不到封面时画「渐变天空 + 圆日 + 三层山影」，按歌名哈希选调色板和构图。
+ * 查不到封面时画「渐变天空 + 圆日」，按歌名哈希选调色板和构图。
+ * （原来安卓同款还有三层山影，网页版按要求去掉了，封面不再带阴影）
  */
 (function (global) {
   // 与安卓 coverColors() 完全一致的 6 组调色板
@@ -28,10 +29,6 @@
     var n = parseInt(hex.slice(1), 16)
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
   }
-  function darken(hex, f) {
-    var c = hexToRgb(hex).map(function (v) { return Math.round(v * (1 - f)) })
-    return 'rgb(' + c.join(',') + ')'
-  }
 
   /** 返回可直接当 background-image / img src 用的 SVG data URI */
   function generatedCover(seed) {
@@ -42,13 +39,6 @@
     var sunR = 13 + (v % 40) / 4            // 13 ~ 22.75
     var sunX = 30 + (v % 30)                // 30 ~ 59
     var sunY = 22 + (v % 17)                // 22 ~ 38
-    // 三层山影：lerp(palette[1], Black, 0.25 / 0.40 / 0.55)
-    function hill(f, left, baseY, width, height) {
-      var cx = left + width / 2
-      return '<path d="M' + left + ',' + baseY +
-        ' Q' + cx + ',' + (baseY - height) + ' ' + (left + width) + ',' + baseY +
-        ' Z" fill="' + darken(p[1], f) + '"/>'
-    }
     var svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">' +
       '<defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1">' +
@@ -57,9 +47,6 @@
       '<rect width="100" height="100" fill="url(#s)"/>' +
       '<circle cx="' + sunX + '" cy="' + sunY + '" r="' + sunR * 2 + '" fill="#F6EFD4" opacity="0.15"/>' +
       '<circle cx="' + sunX + '" cy="' + sunY + '" r="' + sunR + '" fill="#F6EFD4" opacity="0.95"/>' +
-      hill(0.25, -15, 88, 75, 60) +
-      hill(0.40, 8, 92, 85, 62) +
-      hill(0.55, 55, 96, 80, 66) +
       '</svg>'
     return 'data:image/svg+xml,' + encodeURIComponent(svg)
   }

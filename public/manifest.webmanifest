@@ -2,7 +2,7 @@
   "name": "云音乐",
   "short_name": "云音乐",
   "description": "歌单导入与在线播放",
-  "start_url": "/m.html",
+  "start_url": "/m",
   "id": "/m.html",
   "scope": "/",
   "display": "standalone",
