@@ -1,50 +1,173 @@
 # cloudmusic-cf
 
-Cloudflare Workers + PWA 版「云音乐」：导入 QQ 音乐 / 网易云歌单，点歌在线播放。
-音源策略与安卓客户端一致：夸克（下歌吧）优先，其次网易云、酷我；命中试听片段会继续找完整版。
+Cloudflare Workers + PWA 版「云音乐」。导入 QQ 音乐 / 网易云歌单，或直接搜歌，点一下就在线播放。
+
+项目提供**两套界面**，共用同一套后端接口与浏览器本地数据：
+
+| 入口 | 用途 | 文件 |
+|---|---|---|
+| `/` | 桌面版，深色卡片式布局 | `index.html` / `app.js` / `style.css` |
+| `/m.html` | 移动版，界面与交互参照安卓客户端，为 iPhone 网页播放设计 | `m.html` / `m.js` / `m.css` |
+
+手机 UA（iPhone / iPad / Android 等）访问 `/` 会**自动跳转到移动版**；在移动版「设置 → 切换到桌面版」可豁免跳转（记在 `sessionStorage`）。PWA 的 `start_url` 也指向 `/m.html`。
+
+> 音源策略与安卓客户端一致：夸克（下歌吧）优先，其次网易云、酷我；命中的试听片段只记下来继续找完整版，全是片段才兜底返回。
+
+---
+
+## 功能
+
+### 歌单与点歌（两套界面都有）
+- **导入歌单**：粘贴 QQ 音乐 / 网易云歌单链接或纯数字 id，短链会跟随重定向；纯数字 id 可手选平台。
+- **搜索点歌**：按歌名 / 歌手搜索，结果直接点播（不必先有歌单）。
+- **我的收藏**：播放页点心形收藏，收藏列表可当歌单播放。
+
+### 播放器（两套界面都有）
+- 底部迷你播放器显示当前歌曲与进度，点它进入全屏播放页。
+- 全屏播放页：氛围渐变背景、封面页 ↔ 歌词页翻面、进度条、上下首、播放模式、收藏。
+- **播放模式**：列表循环 / 随机 / 单曲循环（记忆到本地）。
+- **定时关闭**：15 / 30 / 60 分钟，或播完本曲后停止。
+- **播放列表（队列）**、**歌曲信息**弹窗。
+- 歌词逐行高亮居中滚动、点歌词行跳转到那一句；**歌词时间校准**（±0.5 秒步进）、**手动搜索歌词**、**重新匹配歌词**。
+- 上述定时关闭、队列、歌曲信息、歌词操作都在播放页 `✦` 更多菜单里。
+- MediaSession：支持系统媒体键 / 锁屏信息（浏览器支持范围内）。
+
+### 移动版专属（对齐安卓客户端）
+- **底部 4 个 Tab**：我的 / 歌单 / 搜歌 / 设置，毛玻璃浮岛底栏。
+- 曲库页深色渐变 **MY LIBRARY** Hero 卡（歌曲数 / 音源 / 歌手数）、吸顶搜索框、播放全部、默认 / 按标题 / 按歌手排序。
+- 浮岛迷你播放器：旋转唱片封面、顶部进度线、歌名-歌手、播放 / 下一首 / 队列；**左右滑切歌**。
+- 全屏播放页封面左上角来源角标、左下歌手、右下曲目序号；**左边缘右滑返回**。
+- 每行歌曲的竖三点菜单：播放这首 / 收藏 / 歌曲信息。
+- 独立的登录 / 欢迎页（可跳过）。
+- 歌曲列表封面用 `IntersectionObserver` 按需懒加载，避免一次请求上百张图。
+
+### 界面与设置
+- **主题**：跟随系统 / 浅色 / 深色。
+- **在线歌词开关**：关闭后不请求歌词接口。
+- **夸克扫码登录** + 手动粘贴 Cookie。
+- 歌曲封面走 iTunes 公开接口查真封面，查不到时回落到按歌名生成的渐变色块。
+- PWA：可「添加到主屏幕」独立运行，含 iOS 主屏图标、状态栏主题色、安全区适配与离线静态资源缓存（Service Worker 缓存版本 `cloudmusic-cf-v3`）。
+
+### 移动端（iPhone）特别处理
+- **音频手势解锁**：Safari 要求 `play()` 在用户手势的同步调用栈里，而本项目需要先异步解析音源。首次交互时用一段 0.05 秒静音 wav 解锁 `<audio>` 元素；若仍被拒绝，会弹出「点此开始播放」兜底。
+- `playsinline` / `viewport-fit=cover` / `safe-area-inset` 适配刘海与 Home 条。
+- 迷你播放器左右滑切歌；播放页左边缘右滑返回。
+- 登录页可跳过（只用公开音源试听），登录态记在本机，不会每次挡路。
+
+---
 
 ## 本地运行
 
 ```bash
 npm install
-npm run dev          # 默认 http://localhost:8787
-npm run typecheck    # 类型检查
+npm run dev          # 默认 http://localhost:8787（端口被占用会顺延）
+npm run typecheck    # tsc --noEmit
 ```
+
+开发期（`localhost` / `127.0.0.1`）**不注册 Service Worker** 并清掉旧注册，避免反复改页面却一直看到缓存的旧版本；生产域名才启用 PWA。
 
 ## 部署
 
 ```bash
 wrangler login
-wrangler secret put STREAM_SECRET     # 随便一串长随机字符串
+wrangler secret put STREAM_SECRET     # 必做：一串长随机字符串
 wrangler deploy
 # 可选：把夸克 Cookie 放服务端，前端就不必填
 wrangler secret put QUARK_COOKIE
 ```
 
+`wrangler.toml` 里的 `STREAM_SECRET = "dev-only-change-me"` **只是本地开发占位值**，它用来给直链令牌和登录态做 AES-GCM 加密。部署前务必用上面的 `wrangler secret put` 覆盖：secret 优先级高于 `[vars]`，且不会写进仓库。仓库是公开的话尤其不要沿用默认值。
+
+部署后先打开 `/api/health` 确认连通；要让 iPhone 能访问，需要是公网 HTTPS 地址（`localhost` 手机连不上）。
+
+---
+
 ## 使用
 
-1. 打开页面 →「设置」→ 点**扫码登录夸克**，用夸克 App 扫屏幕上的二维码并确认；成功后 Cookie 自动填好并保存（跟安卓客户端一样，不用去翻浏览器 Cookie）。
-2. 粘贴 QQ 音乐 / 网易云歌单链接（或纯数字 id，用下拉框选平台）→ 导入。
-3. 点歌名播放。首次会串行查几个音源，状态栏和「解析过程」里能看到每一步。
-4. 手机上可用浏览器「添加到主屏幕」当 PWA 用；同一台手机不便扫码时，二维码下方有「点这里直接打开夸克」的链接。
-5. 扫码接口临时不可用时，仍可在设置里手动粘贴 Cookie 兜底（电脑浏览器 F12 → Network → 复制 Request Headers 里的整条 Cookie，需含 `__pus`）。
+1. 打开页面 → 「设置」→ 点**扫码登录夸克**，用夸克 App 扫屏幕上的二维码并确认；成功后 Cookie 自动填好并保存（跟安卓客户端一样，不用去翻浏览器 Cookie）。也可以手动粘贴完整 Cookie（需含 `__pus`）。不登录也能用，只是可能只有 30 秒试听片段。
+2. 粘贴 QQ 音乐 / 网易云歌单链接（或纯数字 id，用下拉框选平台）→ 导入；或在「搜歌 / 搜索点歌」里直接搜一首。
+3. 点歌名播放。首次会串行探几个音源，状态栏和「解析过程」里能看到每一步。
+4. 点底部迷你播放器进入全屏播放页看歌词；`✦` 打开更多菜单。
+5. 手机上用浏览器「添加到主屏幕」当 PWA 用；同一台手机不便扫码时，二维码下方有「点这里直接打开夸克」的链接。
+6. 扫码接口临时不可用时，仍可在设置里手动粘贴 Cookie 兜底（电脑浏览器 F12 → Network → 复制 Request Headers 里的整条 Cookie）。
 
-扫码登录走夸克官方 CAS：`getTokenForQrcodeLogin` 取 token → 夸克 App 扫码 → `getServiceTicketByQrcodeToken` 拿 ticket → `pan.quark.cn/account/info?st=...` 跟重定向逐跳收集 `Set-Cookie`（含 `__pus`）。Worker 无状态，登录过程的 `_UP_*` 会话 Cookie 用 AES-GCM 封进 `loginToken` 由前端带回，**不落服务端、不明文进 URL**。最终 Cookie 只存在浏览器 localStorage；播放链接里的上游地址和 Cookie 也用 AES-GCM 封进短时效令牌，不会变成公开代理。
+### 夸克扫码登录原理
+
+走夸克官方 CAS：`getTokenForQrcodeLogin` 取 token → 夸克 App 扫码 → `getServiceTicketByQrcodeToken` 拿 ticket → `pan.quark.cn/account/info?st=...` 手动跟随重定向、逐跳收集 `Set-Cookie`（含 `__pus`）。
+
+Worker 无状态，登录过程的 `_UP_*` 会话 Cookie 和 token 用 AES-GCM 封进 `loginToken` 由前端带回，**不落服务端、不明文进 URL**，有效期 5 分钟。最终 Cookie 只存在浏览器 `localStorage`；播放链接里的上游地址和 Cookie 也用 AES-GCM 封进 2 小时短时效令牌，不会变成公开代理。二维码 SVG 由 Worker 本地生成，不依赖外部图片服务。
+
+### 浏览器本地存储
+
+| key | 内容 |
+|---|---|
+| `cm.playlist` | 当前歌单 / 播放队列 |
+| `cm.cookie` | 夸克 Cookie |
+| `cm.favs` | 收藏的歌曲 |
+| `cm.playMode` / `cm.lyricOffset` | 播放模式 / 歌词偏移 |
+| `cm.onlineLyric` / `cm.theme` | 在线歌词开关 / 主题 |
+| `cm.loggedIn` | 移动版是否已通过登录页 |
+| `cm.desktop`（sessionStorage） | 豁免手机自动跳转 |
+
+清除本机数据：移动版「设置 → 清除本地数据」，或直接清站点数据。
+
+---
+
+## 目录结构
+
+```
+src/
+  index.ts        Worker 入口，路由分发 + 静态资源
+  playlist.ts     歌单导入（网易云 / QQ）、搜索点歌
+  sources.ts      音源解析：夸克 → 网易云 → 酷我，探活与片段判定
+  quark.ts        夸克分享链接转直链
+  quark-login.ts  扫码登录 CAS 流程
+  lyric.ts        歌词：来源 id 直取 + 酷狗 / 网易云搜索兜底
+  cover.ts        iTunes 专辑封面
+  qr.ts           二维码 SVG 生成
+  match.ts        歌名 / 歌手匹配
+  util.ts         HTTP、AES-GCM 封印、Cookie 合并等工具
+  types.ts        类型定义
+public/
+  index.html / app.js / style.css          桌面版
+  m.html / m.js / m.css                   移动版
+  sw.js                                   Service Worker
+  manifest.webmanifest / icon*.png / icon.svg / apple-touch-icon.png
+wrangler.toml     Workers 配置
+```
 
 ## API
 
-| 接口 | 说明 |
-|---|---|
-| `GET /api/health` | 连通性冒烟测试 |
-| `POST /api/quark/login/start` | 取夸克扫码登录二维码，返回 `qrText` / `qrImage` / 加密的 `loginToken` |
-| `POST /api/quark/login/poll` | `{ loginToken }` → `waiting` / `expired` / `ok`（含 Cookie 与昵称） |
-| `GET /api/qr?data=` | Worker 本地生成的二维码 SVG，不依赖外部图片服务 |
-| `POST /api/playlist` | `{ input, platform? }` → 歌单与曲目列表 |
-| `POST /api/resolve` | `{ title, artist, durationSec, platformId?, cookie? }` → 可播地址、音源、是否片段、解析日志 |
-| `GET /api/stream?t=` | 带 Cookie/Referer/UA 的流式代理，透传 Range |
+所有接口都由同一个 Worker 提供，`GET /api/stream` 与 `GET /api/qr` 外均为 `POST` + JSON。
+
+| 接口 | 请求 | 返回 |
+|---|---|---|
+| `GET /api/health` | — | `{ ok, time }`，连通性冒烟测试 |
+| `POST /api/quark/login/start` | — | `{ loginToken, qrText, qrImage }` |
+| `POST /api/quark/login/poll` | `{ loginToken }` | `{ status: waiting \| expired \| ok, cookie?, account?, debug? }` |
+| `GET /api/qr?data=` | 二维码内容（≤1024 字符） | Worker 本地生成的 SVG |
+| `POST /api/playlist` | `{ input, platform? }` | 歌单名、平台、曲目列表 |
+| `POST /api/search` | `{ keyword }` | `{ tracks }`，可直接点播的曲目列表 |
+| `POST /api/resolve` | `{ title, artist, durationSec, platformId?, cookie? }` | `{ ok, resolved?, notes, error? }`；`resolved` 含 `url` / `source` / `partial` / `fileName` |
+| `POST /api/lyric` | `{ title, artist, platform?, platformId? }` | `{ lyric, source?, error? }`，LRC 文本 |
+| `POST /api/cover` | `{ title, artist }` | `{ url }`，iTunes 封面（无结果时为 `null`） |
+| `GET /api/stream?t=` | 加密令牌 | 带 Cookie / Referer / UA 的流式代理，透传 Range |
+
+`/api/resolve` 的 Cookie 也可通过 `X-Quark-Cookie` 请求头或服务端 `QUARK_COOKIE` secret 提供。夸克 CDN 返回 412（Cookie / `__puus` 不匹配）时，流式代理会带上 `X-Cloudmusic-Error: quark-412`，提示前端去刷新登录态。
+
+## 音源与歌词策略
+
+- **音源**：夸克（下歌吧）→ 网易云 → 酷我。每条候选都先探活；按文件大小 / 时长判断是否为试听片段，是则记下来继续找完整版，全部只有片段才用第一个兜底。
+- **歌词**：优先用歌单自带的来源歌曲 id 直取（QQ `fcg_query_lyric.fcg`、网易云 `/api/song/lyric`），失败再用酷狗搜索（对歌名 + 歌手打分，匹配不上宁可不返回，避免错歌歌词），最后网易云搜索兜底。
+- **封面**：iTunes 公开搜索接口，命中的第一张 artwork 放大到 600×600；查不到时用按歌名生成的渐变色块 + 首字占位。
+
+---
 
 ## 已知限制
 
-- 没有 DLNA 投屏、FLAC 转码、离线缓存、后台常驻逻辑。
+- 没有 DLNA 投屏、FLAC 转码、离线音乐缓存、后台常驻播放逻辑（这两项是安卓客户端专属，网页版不做）。
 - `*.workers.dev` 在中国大陆可能访问不稳；部署后先开 `/api/health` 测连通性，必要时绑自定义域名。
 - 夸克直链是会话绑定的：签发时刷新的 `__puus` 必须跟着这条直链走，否则 CDN 返回 412；Cookie 过期就重新扫码登录。
+- iOS Safari 的自动播放策略较严格，已做静音解锁 + 「点此开始播放」兜底；后台 / 锁屏连续播放仍受系统与浏览器策略影响，建议真机验证。
+- iTunes 封面按歌名 + 歌手检索，可能与原专辑封面不一致。
+- 搜索点歌目前只走网易云搜索；封面结果只在当前会话内缓存（`coverCache`），刷新页面会重新查 iTunes。播放模式、歌词偏移、主题、收藏等设置则持久化在 `localStorage`。

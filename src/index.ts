@@ -79,8 +79,7 @@ export default {
       }
     }
 
-    // 歌词：网易云优先，QQ 兜底
-    // 搜索点歌
+    // 搜索点歌：网易云搜索，结果可直接点播
     if (url.pathname === '/api/search' && request.method === 'POST') {
       try {
         const body = (await request.json()) as { keyword?: string }
@@ -102,6 +101,7 @@ export default {
       }
     }
 
+    // 歌词：来源歌曲 id 直取优先（QQ / 网易云），失败再用酷狗、网易云搜索兜底
     if (url.pathname === '/api/lyric' && request.method === 'POST') {
       try {
         const body = (await request.json()) as {
