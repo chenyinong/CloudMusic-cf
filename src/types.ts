@@ -84,4 +84,6 @@ export interface ResolveRequest {
   durationSec: number
   platformId?: string
   cookie?: string
+  /** 下歌吧 id（搜歌结果里的夸克条目）：直接用它取直链，别再搜一遍挑错文件 */
+  quarkId?: string
 }

@@ -263,6 +263,7 @@ function songRow(t, i, opts = {}) {
         <div class="song-title">${esc(t.title)}</div>
         <div class="song-sub">${esc(t.artist || '未知歌手')}${t.album ? ' · ' + esc(t.album) : ''}</div>
       </div>
+      ${opts.source ? `<span class="song-src">${esc(opts.source)}</span>` : ''}
       ${opts.duration ? `<span class="muted" style="font-size:12px">${t.durationSec ? fmt(t.durationSec) : ''}</span>` : ''}
       <button class="song-more" data-more="${i}" aria-label="更多"><svg><use href="#i-more"/></svg></button>
     </div>`
@@ -575,7 +576,7 @@ async function playAt(i) {
       toast('正在找完整版…')
       const d = await post('/api/resolve', {
         title: t.title, artist: t.artist, durationSec: t.durationSec,
-        platformId: t.platformId, cookie: state.cookie,
+        platformId: t.platformId, cookie: state.cookie, quarkId: t.quarkId,
       })
       if (token !== playToken) return          // 已经点了别的歌，这次结果作废
       if (!d.ok || !d.resolved) { toast(d.error || '没找到可播放的音源'); return }
@@ -640,7 +641,7 @@ async function prefetchOne(i) {
   try {
     const d = await post('/api/resolve', {
       title: t.title, artist: t.artist, durationSec: t.durationSec,
-      platformId: t.platformId, cookie: state.cookie,
+      platformId: t.platformId, cookie: state.cookie, quarkId: t.quarkId,
     })
     if (d.ok && d.resolved) resolvedPut(t, d.resolved)
   } catch { /* 预取失败无所谓，真播的时候再解析 */ }
@@ -1386,19 +1387,82 @@ async function importPlaylist() {
 $('#pl-import').addEventListener('click', importPlaylist)
 $('#pl-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') importPlaylist() })
 
+/* ══════════ 搜歌：音源分类胶囊 ══════════
+ * 对齐安卓 ImportScreen：搜索结果里一行三个胶囊（全部 / 网易云 / 夸克网盘 + 数量），
+ * 点一下只过滤列表，不重新请求、不改排序；播放队列也跟着过滤后的列表走。
+ */
+const SRC_FILTERS = [
+  { id: 'all', label: '全部' },
+  { id: 'netease', label: '网易云' },
+  { id: 'quark', label: '夸克网盘' },
+]
+let searchHits = []
+let searchCounts = { all: 0, netease: 0, quark: 0 }
+let searchFilter = 'all'
+let searchKeyword = ''
+
+function hitSources(h) { return Array.isArray(h?.sources) ? h.sources : [] }
+/** 行尾的小标签：网易云 / 夸克 / 双源 */
+function sourceShort(h) {
+  const s = hitSources(h)
+  if (!s.length) return ''
+  if (s.length > 1) return '双源'
+  return s[0] === 'quark' ? '夸克' : '网易云'
+}
+function visibleSearchHits() {
+  if (searchFilter === 'netease') return searchHits.filter((h) => hitSources(h).includes('netease'))
+  if (searchFilter === 'quark') return searchHits.filter((h) => hitSources(h).includes('quark'))
+  return searchHits
+}
+function renderSearchCapsules() {
+  const el = $('#search-capsules')
+  if (!el) return
+  if (!searchHits.length) { el.hidden = true; return }
+  el.hidden = false
+  el.innerHTML = SRC_FILTERS.map((f) =>
+    `<button class="src-capsule ${searchFilter === f.id ? 'on' : ''}" data-f="${f.id}">${f.label} ${searchCounts[f.id] ?? 0}</button>`
+  ).join('')
+  el.querySelectorAll('[data-f]').forEach((b) =>
+    b.addEventListener('click', () => {
+      searchFilter = b.dataset.f
+      renderSearchCapsules()
+      renderSearchResults()
+    })
+  )
+}
+function renderSearchResults() {
+  const root = $('#search-results')
+  if (!root) return
+  const list = visibleSearchHits()
+  if (!list.length) {
+    const label = (SRC_FILTERS.find((f) => f.id === searchFilter) || {}).label || ''
+    root.innerHTML = emptyBox(searchHits.length ? `「${label}」这个源没搜到东西` : '没搜到结果')
+    return
+  }
+  root.innerHTML = list.map((t, i) => songRow(t, i, { active: false, duration: true, source: sourceShort(t) })).join('')
+  bindSongRows(root, list, { name: '搜索：' + searchKeyword })
+  observeCovers(root, list)
+}
 // 搜歌
 async function doSearch() {
   const kw = $('#search-input').value.trim()
   if (!kw) return
   const root = $('#search-results')
   root.innerHTML = '<div class="empty">搜索中…</div>'
+  $('#search-capsules').hidden = true
   try {
-    const d = await post('/api/search', { keyword: kw })
-    const tracks = d.tracks || []
-    if (!tracks.length) { root.innerHTML = emptyBox('没搜到结果'); return }
-    root.innerHTML = tracks.map((t, i) => songRow(t, i, { active: false, duration: true })).join('')
-    bindSongRows(root, tracks)
-    observeCovers(root, tracks)
+    const d = await post('/api/search', { keyword: kw, cookie: state.cookie })
+    searchHits = d.hits || d.tracks || []
+    searchCounts = d.counts || { all: searchHits.length, netease: 0, quark: 0 }
+    searchFilter = 'all'
+    searchKeyword = kw
+    const notes = $('#search-notes')
+    if (notes) {
+      notes.textContent = (d.notes || []).join(' · ')
+      notes.hidden = !(d.notes || []).length
+    }
+    renderSearchCapsules()
+    renderSearchResults()
   } catch (e) { root.innerHTML = emptyBox('搜索失败：' + e.message) }
 }
 $('#search-go').addEventListener('click', doSearch)

@@ -73,6 +73,7 @@ function resolveCacheKey(req: ResolveRequest): string {
     req.title,
     req.artist,
     req.platformId ?? '',
+    req.quarkId ?? '',
     Math.round(req.durationSec || 0),
     ck ? String(ckHash) : '',
   ].join('|')
@@ -178,6 +179,12 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
       notes.push('夸克：未填 Cookie，跳过（只用公开源）')
       return null
     }
+    // 搜歌结果里点了某条网盘资源 → 直接用它，别再搜一遍挑同名文件
+    if (req.quarkId) {
+      const c = await quarkCandById(req.quarkId, cookie)
+      if (c && (await probe(c)) === 'ok') return c
+      notes.push('夸克：指定的网盘资源不可用，改走搜索')
+    }
     const hits = await lmySearch(kws[0] ?? '')
     notes.push(`下歌吧：搜到 ${hits.length} 条`)
     const same = hits.filter((h) => sameTitle(h.title, req.title))
@@ -188,26 +195,12 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     const cands = await Promise.all(
       ordered.slice(0, 3).map(async (h) => {
         try {
-          const detail = await lmyDetail(h.id)
-          const share = detail.downloads
-            .filter((x) => /pan\.quark\.cn\/s\//.test(x.url))
-            .sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality))[0]
-          if (!share) return null
-          const q = await quarkDirect(share.url, cookie).catch(() => null)
-          if (!q) {
-            notes.push(`夸克「${h.title}」直链签发失败`)
+          const c = await quarkCandById(h.id, cookie)
+          if (!c) {
+            notes.push(`夸克「${h.title}」拿不到直链`)
             return null
           }
-          const c: Cand = {
-            url: q.url,
-            source: '夸克',
-            ref: QUARK_REFERER,
-            ua: UA_PC,
-            cookie: q.cookie,
-            title: h.title,
-            fileName: q.fileName,
-            total: q.size,
-          }
+          c.title = h.title
           return (await probe(c)) === 'ok' ? c : null
         } catch {
           return null
@@ -348,6 +341,27 @@ async function lmyDetail(
       url: String(o.url ?? ''),
       quality: String(o.quality ?? ''),
     })),
+  }
+}
+
+/** 下歌吧 id → 夸克直链候选（分享详情 → 签发直链）。 */
+async function quarkCandById(id: string, cookie: string): Promise<Cand | null> {
+  const detail = await lmyDetail(id)
+  const share = detail.downloads
+    .filter((x) => /pan\.quark\.cn\/s\//.test(x.url))
+    .sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality))[0]
+  if (!share) return null
+  const q = await quarkDirect(share.url, cookie).catch(() => null)
+  if (!q) return null
+  return {
+    url: q.url,
+    source: '夸克',
+    ref: QUARK_REFERER,
+    ua: UA_PC,
+    cookie: q.cookie,
+    title: '',
+    fileName: q.fileName,
+    total: q.size,
   }
 }
 

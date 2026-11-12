@@ -1,5 +1,6 @@
 import type { Env, ResolveRequest, StreamPayload } from './types'
-import { fetchPlaylist, resolveRef, searchTracks } from './playlist'
+import { fetchPlaylist, resolveRef } from './playlist'
+import { searchMulti } from './search'
 import { pollLogin, startLogin } from './quark-login'
 import { verifyQuarkCookie } from './quark'
 import { fetchCover } from './cover'
@@ -98,12 +99,13 @@ export default {
       }
     }
 
-    // 搜索点歌：网易云搜索，结果可直接点播
+    // 搜索点歌：网易云 + 夸克网盘两源并行，结果带音源标签
     if (url.pathname === '/api/search' && request.method === 'POST') {
       try {
-        const body = (await request.json()) as { keyword?: string }
-        const tracks = await searchTracks(body.keyword ?? '')
-        return json({ tracks })
+        const body = (await request.json()) as { keyword?: string; cookie?: string }
+        const r = await searchMulti(body.keyword ?? '', body.cookie ?? '')
+        // tracks 是 hits 的别名，桌面版老代码还在用
+        return json({ ...r, tracks: r.hits })
       } catch (e) {
         return json({ error: errMsg(e) }, 502)
       }
@@ -160,10 +162,15 @@ export default {
         'y.gtimg.cn', 'y.qq.com',
         'is1-ssl.mzstatic.com', 'is2-ssl.mzstatic.com', 'is3-ssl.mzstatic.com',
         'is4-ssl.mzstatic.com', 'is5-ssl.mzstatic.com',
+        // 搜歌页夸克源（下歌吧）带的封面 CDN：img1/img3.kuwo.cn、s3.liumingye.cn
+        'kuwo.cn', 'liumingye.cn',
       ].some((h) => target.hostname === h || target.hostname.endsWith('.' + h))
       if (!ok) return new Response('host not allowed', { status: 400 })
       const ref = target.hostname.includes('music.126.net') ? 'https://music.163.com/'
-        : target.hostname.includes('gtimg') ? 'https://y.qq.com/' : 'https://itunes.apple.com/'
+        : target.hostname.includes('gtimg') ? 'https://y.qq.com/'
+        : target.hostname.includes('kuwo') ? 'https://www.kuwo.cn/'
+        : target.hostname.includes('liumingye') ? 'https://so.liumingye.cn/'
+        : 'https://itunes.apple.com/'
       const upstream = await http(target.toString(), {
         headers: { 'User-Agent': UA_PC, Referer: ref },
         timeoutMs: 12000,
