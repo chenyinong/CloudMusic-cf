@@ -1182,6 +1182,24 @@ $('#set-install').addEventListener('click', async () => {
 })
 // 已经是 App 形态就隐藏这一行
 if (isStandalone()) $('#set-install').hidden = true
+/** 安装状态自检：让用户一眼看出是「没部署/没 HTTPS/SW 没就绪」还是「已装好」 */
+async function renderInstallState() {
+  const el = $('#set-install-state')
+  if (!el) return
+  const bits = []
+  bits.push(isStandalone() ? '已在主屏幕 App 中运行' : '当前在浏览器中运行')
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration()
+      bits.push(reg?.active ? '离线缓存已就绪' : '离线缓存未就绪，刷新一次即可')
+    } catch { bits.push('离线缓存不可用') }
+  } else {
+    bits.push('浏览器不支持离线缓存')
+  }
+  if (!window.isSecureContext) bits.push('⚠ 非 HTTPS，无法安装')
+  el.textContent = bits.join(' · ')
+}
+renderInstallState()
 
 // 登录页
 $('#l-enter').addEventListener('click', async () => {

@@ -3,6 +3,7 @@
   "short_name": "云音乐",
   "description": "歌单导入与在线播放",
   "start_url": "/m.html",
+  "id": "/m.html",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

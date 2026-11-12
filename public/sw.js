@@ -7,9 +7,14 @@ const PRECACHE = [
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE)
-      .then((c) => c.addAll(PRECACHE))
-      .then(() => self.skipWaiting())
+    (async () => {
+      const c = await caches.open(CACHE)
+      // 逐个缓存：某一个文件 404 不应该让整个安装失败
+      // （addAll 一失败 SW 就装不上，Chrome 会判定站点「不可安装」，
+      //   点「添加到主屏幕」就没反应）
+      await Promise.all(PRECACHE.map((u) => c.add(u).catch(() => {})))
+      await self.skipWaiting()
+    })()
   )
 })
 
