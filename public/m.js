@@ -309,6 +309,27 @@ function renderAll() {
   renderPlists()
   renderMini()
   renderQuarkState()
+  renderSourceInfo()
+}
+
+/* ══════════ 音源提示 ══════════ */
+/** 当前能用到的音源：登录夸克就能拿完整版，否则只有公开源的试听片段 */
+function currentSource() {
+  if (state.cookie) return { label: '夸克 · 完整版', full: true }
+  return { label: '公开源 · 试听片段', full: false }
+}
+/** 刷新歌单页「当前音源」条 + 歌单详情页的音源徽标 */
+function renderSourceInfo() {
+  const s = currentSource()
+  const txt = $('#pl-source-text')
+  if (txt) txt.textContent = s.label
+  const strip = $('#pl-source')
+  if (strip) strip.classList.toggle('off', !s.full)
+  const badge = $('#pl-source-badge')
+  if (badge) {
+    badge.textContent = s.label
+    badge.classList.toggle('off', !s.full)
+  }
 }
 
 /* ══════════ 歌单集合（本地 + 云端） ══════════ */
@@ -367,6 +388,7 @@ function renderDetail() {
   if (!p) return
   $('#pl-title').textContent = p.name
   $('#pl-meta').textContent = `${p.platform === 'qq' ? 'QQ 音乐' : '网易云'} · ${p.tracks?.length || 0} 首${p.synced ? ' · 已同步到云端' : ' · 仅本机'}`
+  renderSourceInfo()
   const root = $('#pl-tracks')
   if (!p.tracks?.length) { root.innerHTML = emptyBox('这个歌单还没有歌曲'); return }
   root.innerHTML = p.tracks.map((t, i) => songRow(t, i, { active: false, duration: true })).join('')
@@ -507,6 +529,7 @@ async function playAt(i) {
     }
     toast(d.resolved.partial ? '只有试听片段，建议登录夸克' : '正在播放完整版')
     updateMediaSession(t)
+    renderSourceInfo()
   } catch (e) {
     toast('解析失败：' + e.message)
   } finally {
@@ -836,6 +859,7 @@ function renderQuarkState() {
   $('#login-state').textContent = on ? '已登录 · 可听完整版' : '未登录 · 只能听公开音源'
   $('#l-cookie').value = state.cookie
   $('#set-cookie').value = state.cookie
+  renderSourceInfo()
 }
 /* ══════════ 夸克 Cookie 云端同步 ══════════ */
 /**
@@ -1059,6 +1083,11 @@ $('#play-all').addEventListener('click', () => {
 
 // 歌单详情
 $('#pl-back').addEventListener('click', () => switchTab('playlist'))
+// 点「当前音源」条 → 去设置里处理夸克登录
+$('#pl-source').addEventListener('click', () => {
+  switchTab('settings')
+  toast(state.cookie ? '夸克已登录，播放优先取完整版' : '未登录夸克，只有公开音源的试听片段')
+})
 $('#pl-play-all').addEventListener('click', () => {
   const p = state.detail
   if (p?.tracks?.length) playFromList(p.tracks, 0, p.name)

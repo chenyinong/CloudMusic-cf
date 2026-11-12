@@ -461,6 +461,25 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .pl-head-main h2 { font-size: 19px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-head-main .muted { font-size: 12px; margin-top: 3px; display: block; }
 
+/* 音源提示：歌单页的「当前音源」条 + 详情页徽标 */
+.src-strip {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 9px 12px; margin-bottom: 2px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--glass-line);
+  color: var(--muted); font-size: 12.5px; cursor: pointer;
+}
+.src-strip .src-ico { width: 16px; height: 16px; flex: none; fill: currentColor; }
+.src-strip b { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.src-strip.off b { color: #d2993b; }
+.src-badge {
+  display: inline-block; flex: none; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  background: var(--surface-2); border: 1px solid var(--glass-line); color: var(--text);
+}
+.src-badge.off { color: #d2993b; }
+.pl-meta-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.pl-meta-row .muted { margin-top: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .cpl { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid rgba(0, 0, 0, .06); }
 .cpl-main { flex: 1; min-width: 0; }
 .cpl-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
