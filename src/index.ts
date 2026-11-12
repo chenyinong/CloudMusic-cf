@@ -5,7 +5,7 @@ import { fetchCover } from './cover'
 import { qrSvg } from './qr'
 import { resolveTrack } from './sources'
 import { fetchLyric } from './lyric'
-import { http, json, unseal, withCors, UA_PC } from './util'
+import { http, json, unseal, withCors, UA_PC, seal } from './util'
 import { hashPassword, verifyPassword, signToken, verifyToken } from './auth'
 import {
   createUser,
@@ -17,6 +17,9 @@ import {
   listPlaylists,
   getPlaylist,
   deletePlaylist,
+  getUserSetting,
+  saveUserSetting,
+  deleteUserSetting,
 } from './store'
 
 export default {
@@ -264,6 +267,36 @@ export default {
       if (!uid) return json({ error: '未登录' }, 401)
       const id = Number(url.pathname.split('/').pop())
       await deletePlaylist(env.DB, id, uid)
+      return json({ ok: true })
+    }
+
+    // 夸克 Cookie 云端同步（登录后可用；Cookie 用 AES-GCM 加密后存 D1）
+    if (url.pathname === '/api/settings/quark' && request.method === 'GET') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const row = await getUserSetting(env.DB, uid)
+      if (!row || !row.quark_cookie) return json({ hasCookie: false, updatedAt: 0 })
+      const plain = await unseal<{ c?: string }>(row.quark_cookie, env.STREAM_SECRET)
+      if (!plain?.c) return json({ hasCookie: false, updatedAt: 0 })
+      return json({ hasCookie: true, cookie: plain.c, updatedAt: row.updated_at })
+    }
+    if (url.pathname === '/api/settings/quark' && request.method === 'POST') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      const b = (await request.json().catch(() => ({}))) as { cookie?: string }
+      const cookie = (b.cookie ?? '').trim()
+      if (!cookie) {
+        await deleteUserSetting(env.DB, uid)
+        return json({ ok: true, updatedAt: Date.now(), cleared: true })
+      }
+      const sealed = await seal({ c: cookie }, env.STREAM_SECRET)
+      const updatedAt = await saveUserSetting(env.DB, uid, sealed)
+      return json({ ok: true, updatedAt })
+    }
+    if (url.pathname === '/api/settings/quark' && request.method === 'DELETE') {
+      const uid = await requireUser(request)
+      if (!uid) return json({ error: '未登录' }, 401)
+      await deleteUserSetting(env.DB, uid)
       return json({ ok: true })
     }
 

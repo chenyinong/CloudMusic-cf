@@ -91,7 +91,25 @@ Write-Output '[8] /api/me'
 $r = Req GET '/api/me' $null $ut
 Check 'me returns username' ($r.ok -and $r.data.username -eq $user) ("code={0} body={1}" -f $r.code, $r.raw)
 
-Write-Output '[9] cleanup test user'
+Write-Output '[9] quark cookie sync'
+$r = Req GET '/api/settings/quark' $null $null
+Check 'cookie GET without token -> 401' ($r.code -eq '401') ("code={0}" -f $r.code)
+$r = Req GET '/api/settings/quark' $null $ut
+Check 'cookie GET empty' ($r.ok -and $r.data.hasCookie -eq $false) ("code={0} body={1}" -f $r.code, $r.raw)
+$r = Req POST '/api/settings/quark' @{ cookie = '__pus=abc; __puus=xyz' } $ut
+Check 'cookie POST 200' $r.ok ("code={0} body={1}" -f $r.code, $r.raw)
+$r = Req GET '/api/settings/quark' $null $ut
+Check 'cookie roundtrip' ($r.ok -and $r.data.cookie -eq '__pus=abc; __puus=xyz') ("code={0} body={1}" -f $r.code, $r.raw)
+$r = Req POST '/api/settings/quark' @{ cookie = '__pus=new' } $ut
+Check 'cookie overwrite 200' $r.ok ("code={0}" -f $r.code)
+$r = Req GET '/api/settings/quark' $null $ut
+Check 'cookie overwritten' ($r.data.cookie -eq '__pus=new') ("body={0}" -f $r.raw)
+$r = Req DELETE '/api/settings/quark' $null $ut
+Check 'cookie DELETE 200' $r.ok ("code={0}" -f $r.code)
+$r = Req GET '/api/settings/quark' $null $ut
+Check 'cookie cleared' ($r.data.hasCookie -eq $false) ("body={0}" -f $r.raw)
+
+Write-Output '[10] cleanup test user'
 $users = (Req GET '/api/admin/users' $null $admin).data
 $uid = ($users | Where-Object { $_.username -eq $user }).id
 $r = Req DELETE ("/api/admin/users/" + $uid) $null $admin

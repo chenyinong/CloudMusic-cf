@@ -1,5 +1,5 @@
 // D1 存储层：用户与歌单的增删查。
-import type { UserRow, PlaylistRow } from './types'
+import type { UserRow, PlaylistRow, UserSettingRow } from './types'
 
 export async function createUser(
   db: D1Database,
@@ -36,7 +36,40 @@ export async function listUsers(db: D1Database): Promise<Array<{ id: number; use
 
 export async function deleteUser(db: D1Database, id: number): Promise<void> {
   await db.prepare('DELETE FROM playlists WHERE user_id = ?').bind(id).run()
+  await db.prepare('DELETE FROM user_settings WHERE user_id = ?').bind(id).run()
   await db.prepare('DELETE FROM users WHERE id = ?').bind(id).run()
+}
+
+/* ── 用户设置（夸克 Cookie） ───────────────────────────────── */
+
+export async function getUserSetting(
+  db: D1Database,
+  userId: number
+): Promise<UserSettingRow | null> {
+  return (await db
+    .prepare('SELECT * FROM user_settings WHERE user_id = ?')
+    .bind(userId)
+    .first()) as UserSettingRow | null
+}
+
+/** 覆盖式保存：新 Cookie 直接盖掉旧的。 */
+export async function saveUserSetting(
+  db: D1Database,
+  userId: number,
+  quarkCookie: string
+): Promise<number> {
+  const now = Date.now()
+  await db
+    .prepare(
+      'INSERT INTO user_settings (user_id, quark_cookie, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET quark_cookie = excluded.quark_cookie, updated_at = excluded.updated_at'
+    )
+    .bind(userId, quarkCookie, now)
+    .run()
+  return now
+}
+
+export async function deleteUserSetting(db: D1Database, userId: number): Promise<void> {
+  await db.prepare('DELETE FROM user_settings WHERE user_id = ?').bind(userId).run()
 }
 
 export async function savePlaylist(

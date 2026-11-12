@@ -836,6 +836,47 @@ function renderQuarkState() {
   $('#l-cookie').value = state.cookie
   $('#set-cookie').value = state.cookie
 }
+/* ══════════ 夸克 Cookie 云端同步 ══════════ */
+/** 保存本机 Cookie 并记下时间戳（用来和云端比新旧） */
+function saveCookieLocal(cookie) {
+  state.cookie = cookie || ''
+  localStorage.setItem('cm.cookie', state.cookie)
+  localStorage.setItem('cm.cookieAt', String(Date.now()))
+}
+/** 把本机 Cookie 上传云端（覆盖旧的）；返回是否成功 */
+async function uploadCookie() {
+  if (!state.account?.token || !state.cookie) return false
+  try {
+    await api('/api/settings/quark', { method: 'POST', body: { cookie: state.cookie } })
+    return true
+  } catch { return false }
+}
+/** 登录后把云端 Cookie 取回来：谁新用谁；本机更新就回写覆盖云端 */
+async function syncCookieFromCloud() {
+  if (!state.account?.token) return
+  try {
+    const d = await api('/api/settings/quark')
+    const cloud = d?.cookie || ''
+    const cloudAt = Number(d?.updatedAt || 0)
+    if (!cloud) {
+      if (state.cookie) await uploadCookie()   // 云端没有、本机有 → 传上去
+      return
+    }
+    const localAt = Number(localStorage.getItem('cm.cookieAt') || 0)
+    if (localAt > cloudAt && state.cookie && state.cookie !== cloud) {
+      await uploadCookie()                     // 本机是新的 → 覆盖云端
+      return
+    }
+    if (state.cookie !== cloud) {
+      state.cookie = cloud
+      localStorage.setItem('cm.cookie', cloud)
+      localStorage.setItem('cm.cookieAt', String(cloudAt || Date.now()))
+      renderQuarkState()
+      toast('已从云端恢复夸克 Cookie')
+    }
+  } catch { /* 云端取不到就继续用本机的 */ }
+}
+
 let loginTimer = null
 async function beginQuarkLogin(prefix) {
   const btn = $(`#${prefix}-qr`)
@@ -864,12 +905,12 @@ async function beginQuarkLogin(prefix) {
         const r = await post('/api/quark/login/poll', { loginToken: d.loginToken })
         if (r.status === 'ok') {
           clearInterval(loginTimer); loginTimer = null
-          state.cookie = r.cookie || ''
-          localStorage.setItem('cm.cookie', state.cookie)
+          saveCookieLocal(r.cookie || '')
           box.hidden = true
           status.textContent = `登录成功${r.account ? '：' + r.account : ''}`
           renderQuarkState()
-          toast('夸克登录成功，可听完整版')
+          const synced = await uploadCookie()
+          toast(synced ? '夸克登录成功，Cookie 已同步到云端' : '夸克登录成功，可听完整版')
         } else if (r.status === 'expired') {
           clearInterval(loginTimer); loginTimer = null
           status.textContent = r.message || '二维码已过期，重新点一次'
@@ -923,6 +964,7 @@ function loginAccountFromLogin() {
       showApp()
       renderAccount()
       toast('登录成功，可同步歌单了')
+      await syncCookieFromCloud()
       await loadCloudLists()
       await syncLocalLists()
     })
@@ -999,11 +1041,12 @@ $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') {
 // 设置
 $('#set-qr').addEventListener('click', () => beginQuarkLogin('set'))
 $('#l-qr').addEventListener('click', () => beginQuarkLogin('l'))
-$('#set-save').addEventListener('click', () => {
-  state.cookie = $('#set-cookie').value.trim()
-  localStorage.setItem('cm.cookie', state.cookie)
+$('#set-save').addEventListener('click', async () => {
+  saveCookieLocal($('#set-cookie').value.trim())
   renderQuarkState()
-  toast(state.cookie ? 'Cookie 已保存' : '已清空 Cookie')
+  if (!state.cookie) { toast('已清空 Cookie'); return }
+  const synced = await uploadCookie()
+  toast(synced ? 'Cookie 已保存并同步到云端' : 'Cookie 已保存')
 })
 $('#set-theme').addEventListener('change', (e) => {
   localStorage.setItem('cm.theme', e.target.value)
@@ -1023,11 +1066,11 @@ $('#set-clear').addEventListener('click', () => {
 $('#set-desktop').addEventListener('click', () => { sessionStorage.setItem('cm.desktop', '1'); location.href = '/' })
 
 // 登录页
-$('#l-enter').addEventListener('click', () => {
-  state.cookie = $('#l-cookie').value.trim()
-  localStorage.setItem('cm.cookie', state.cookie)
+$('#l-enter').addEventListener('click', async () => {
+  saveCookieLocal($('#l-cookie').value.trim())
   localStorage.setItem('cm.loggedIn', '1')
   showApp()
+  if (state.account?.token) await uploadCookie()
 })
 
 // 账号与云端歌单同步
@@ -1056,6 +1099,7 @@ function loginAccount() {
       $('#acc-pass').value = ''
       renderAccount()
       toast('登录成功，可同步歌单了')
+      await syncCookieFromCloud()
       await loadCloudLists()
       await syncLocalLists()
     })
@@ -1223,8 +1267,11 @@ if (localStorage.getItem('cm.loggedIn') === '1') showApp()
 else showLogin()
 renderAccount()
 renderQuarkState()
-// 已登录则把云端歌单拉回来（换设备也能看到「歌单」列表）
-if (state.account?.token) loadCloudLists()
+// 已登录则把云端歌单拉回来（换设备也能看到「歌单」列表），并恢复夸克 Cookie
+if (state.account?.token) {
+  loadCloudLists()
+  syncCookieFromCloud()
+}
 
 // 开发期不注册 SW，避免反复改页面却看到旧缓存；生产域名才启用 PWA
 if ('serviceWorker' in navigator) {

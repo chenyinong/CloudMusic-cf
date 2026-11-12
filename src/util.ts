@@ -190,7 +190,7 @@ export function json(data: unknown, status = 200): Response {
       'Cache-Control': 'no-store',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'Content-Type, X-Quark-Cookie',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     },
   })
 }
@@ -199,6 +199,6 @@ export function withCors(resp: Response): Response {
   const h = new Headers(resp.headers)
   h.set('Access-Control-Allow-Origin', '*')
   h.set('Access-Control-Allow-Headers', 'Content-Type, X-Quark-Cookie')
-  h.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  h.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: h })
 }

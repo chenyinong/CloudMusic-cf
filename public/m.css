@@ -347,7 +347,7 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
   border-radius: 26px; overflow: hidden; display: grid; place-items: center;
   color: #fff; font-size: 64px; font-weight: 600;
   background: linear-gradient(145deg, #8b7bf0, #4a7bf0);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, .18);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .08);
 }
 .pp-cover-card img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .pp-cover-fade {

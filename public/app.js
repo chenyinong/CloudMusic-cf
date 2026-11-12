@@ -834,15 +834,16 @@ $('#btn-cancel').addEventListener('click', closeSettings)
 $('#settings').addEventListener('click', (e) => {
   if (e.target.id === 'settings') closeSettings()
 })
-$('#btn-save').addEventListener('click', () => {
-  state.cookie = $('#cookie').value.trim()
-  localStorage.setItem('cm.cookie', state.cookie)
+$('#btn-save').addEventListener('click', async () => {
+  saveCookieLocal($('#cookie').value.trim())
   localStorage.setItem('cm.theme', $('#theme').value)
   state.onlineLyric = $('#online-lyric').checked
   localStorage.setItem('cm.onlineLyric', state.onlineLyric ? 'on' : 'off')
   applyTheme()
   closeSettings()
-  setStatus(state.cookie ? '夸克 Cookie 已保存，会优先找完整版' : '已清空 Cookie，只用公开源', true)
+  if (!state.cookie) { setStatus('已清空 Cookie，只用公开源', true); return }
+  const synced = await uploadCookie()
+  setStatus(synced ? '夸克 Cookie 已保存并同步到云端' : '夸克 Cookie 已保存，会优先找完整版', true)
 })
 $('#theme').addEventListener('change', () => {
   localStorage.setItem('cm.theme', $('#theme').value)
@@ -852,6 +853,48 @@ $('#online-lyric').addEventListener('change', () => {
   state.onlineLyric = $('#online-lyric').checked
   localStorage.setItem('cm.onlineLyric', state.onlineLyric ? 'on' : 'off')
 })
+
+// 夸克 Cookie 云端同步
+/** 保存本机 Cookie 并记下时间戳（用来和云端比新旧） */
+function saveCookieLocal(cookie) {
+  state.cookie = cookie || ''
+  localStorage.setItem('cm.cookie', state.cookie)
+  localStorage.setItem('cm.cookieAt', String(Date.now()))
+}
+/** 把本机 Cookie 上传云端（覆盖旧的）；返回是否成功 */
+async function uploadCookie() {
+  if (!state.account?.token || !state.cookie) return false
+  try {
+    await api('/api/settings/quark', { method: 'POST', body: { cookie: state.cookie } })
+    return true
+  } catch { return false }
+}
+/** 登录后把云端 Cookie 取回来：谁新用谁；本机更新就回写覆盖云端 */
+async function syncCookieFromCloud() {
+  if (!state.account?.token) return
+  try {
+    const d = await api('/api/settings/quark')
+    const cloud = d?.cookie || ''
+    const cloudAt = Number(d?.updatedAt || 0)
+    if (!cloud) {
+      if (state.cookie) await uploadCookie()   // 云端没有、本机有 → 传上去
+      return
+    }
+    const localAt = Number(localStorage.getItem('cm.cookieAt') || 0)
+    if (localAt > cloudAt && state.cookie && state.cookie !== cloud) {
+      await uploadCookie()                     // 本机是新的 → 覆盖云端
+      return
+    }
+    if (state.cookie !== cloud) {
+      state.cookie = cloud
+      localStorage.setItem('cm.cookie', cloud)
+      localStorage.setItem('cm.cookieAt', String(cloudAt || Date.now()))
+      const box = $('#cookie')
+      if (box) box.value = cloud
+      setStatus('已从云端恢复夸克 Cookie', true)
+    }
+  } catch { /* 云端取不到就继续用本机的 */ }
+}
 
 // 账号与云端歌单同步
 function renderAccount() {
@@ -872,6 +915,7 @@ async function loginAccountD() {
     $('#acc-pass').value = ''
     renderAccount()
     setStatus('登录成功', true)
+    await syncCookieFromCloud()
     await loadCloudLists()
     await syncLocalLists()
   } catch (e) { msg.textContent = e.message }
@@ -912,12 +956,12 @@ $('#btn-qr-login').addEventListener('click', async () => {
         const r = await post('/api/quark/login/poll', { loginToken: d.loginToken })
         if (r.status === 'ok') {
           clearInterval(loginTimer); loginTimer = null
-          state.cookie = r.cookie
-          localStorage.setItem('cm.cookie', r.cookie)
+          saveCookieLocal(r.cookie)
           $('#cookie').value = r.cookie
           $('#qr-box').hidden = true
           $('#login-status').textContent = `登录成功${r.account ? '：' + r.account : ''}，Cookie 已保存`
-          setStatus('夸克登录成功，会优先找完整版', true)
+          const synced = await uploadCookie()
+          setStatus(synced ? '夸克登录成功，Cookie 已同步到云端' : '夸克登录成功，会优先找完整版', true)
         } else if (r.status === 'expired') {
           clearInterval(loginTimer); loginTimer = null
           $('#login-status').textContent = r.message || '二维码已过期，重新点一次'
@@ -1009,4 +1053,7 @@ if ('serviceWorker' in navigator) {
 applyTheme()
 renderAccount()
 renderPlists()
-if (state.account?.token) loadCloudLists()
+if (state.account?.token) {
+  loadCloudLists()
+  syncCookieFromCloud()
+}

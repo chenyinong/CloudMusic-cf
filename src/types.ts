@@ -23,6 +23,12 @@ export interface PlaylistRow {
   updated_at: number
 }
 
+export interface UserSettingRow {
+  user_id: number
+  quark_cookie: string
+  updated_at: number
+}
+
 export type Platform = 'netease' | 'qq'
 
 export interface Track {

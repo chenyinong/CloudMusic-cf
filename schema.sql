@@ -19,3 +19,11 @@ CREATE TABLE IF NOT EXISTS playlists (
 );
 
 CREATE INDEX IF NOT EXISTS idx_playlists_user ON playlists(user_id);
+
+-- 每个用户的设置（目前是夸克 Cookie，加密后存这里）
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id INTEGER PRIMARY KEY,
+  quark_cookie TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
