@@ -377,7 +377,17 @@ async function openPlaylist(id) {
       const d = await api('/api/playlists/' + p.cloudId)
       p.tracks = JSON.parse(d.tracks)
       p.count = p.tracks.length
-    } catch (e) { toast('读取云端歌单失败：' + e.message); return }
+    } catch (e) {
+      // 云端已经没了（别的设备删的）→ 把本机这张幽灵卡片也清掉
+      if (String(e.message || '').includes('找不到')) {
+        state.plists = state.plists.filter((x) => x.id !== id)
+        savePlists()
+        renderPlists()
+        toast('这张云端歌单已被删除')
+        return
+      }
+      toast('读取云端歌单失败：' + e.message); return
+    }
   }
   state.detail = p
   renderDetail()
@@ -453,7 +463,9 @@ async function loadCloudLists() {
   if (!state.account?.token) return
   try {
     const list = await api('/api/playlists')
+    const cloudIds = new Set()
     for (const p of list) {
+      cloudIds.add(p.id)
       const cid = 'c' + p.id
       let exist = state.plists.find((x) => x.cloudId === p.id)
       if (!exist) exist = state.plists.find((x) => !x.synced && x.name === p.name && x.platform === p.platform)
@@ -473,6 +485,11 @@ async function loadCloudLists() {
         })
       }
     }
+    // 云端已经删掉的（别的设备删的），本机也别留着那张幽灵卡片。
+    // 只清「已同步」的 —— 本机还没上传的歌单跟云端没关系，不能动。
+    const before = state.plists.length
+    state.plists = state.plists.filter((x) => !x.synced || x.cloudId == null || cloudIds.has(x.cloudId))
+    if (state.plists.length !== before) toast('云端有歌单被删掉了，已同步移除')
     savePlists()
     renderPlists()
   } catch (e) { toast('读取云端歌单失败：' + e.message) }
