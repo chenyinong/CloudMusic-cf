@@ -1533,6 +1533,55 @@ $('#set-save').addEventListener('click', async () => {
   const synced = await uploadCookie()
   toast(synced ? 'Cookie 已保存并同步到云端' : 'Cookie 已保存')
 })
+/**
+ * 检测夸克 Cookie 还有效没有。
+ *
+ * 走服务端 /api/settings/quark/check：它拿这份 Cookie 去问夸克的账号接口，
+ * 401/403 就是失效了。Cookie 失效的典型场景是夸克那边改了登录态，
+ * 表现是「本来能播的歌突然播不了」，有个按钮能立刻确认就好。
+ */
+$('#set-check').addEventListener('click', async () => {
+  const out = $('#set-check-out')
+  const btn = $('#set-check')
+  const typed = $('#set-cookie').value.trim()
+  const cookie = typed || state.cookie || ''
+  out.hidden = false
+  if (!cookie) {
+    out.textContent = '还没有 Cookie：先扫码登录，或者手动粘贴一份'
+    out.className = 'hint warn'
+    return
+  }
+  // 检测要走服务端（要拿账号令牌），没登录就先说清楚，别发个必然 401 的请求
+  if (!state.account?.token) {
+    out.textContent = '检测要走云端，先登录云端账号再来'
+    out.className = 'hint warn'
+    return
+  }
+  btn.disabled = true
+  out.textContent = '检测中…'
+  out.className = 'hint'
+  try {
+    const d = await api('/api/settings/quark/check', { method: 'POST', body: { cookie } })
+    const v = d?.valid
+    const tail = (typed && typed !== state.cookie) ? '（测的是输入框里的内容，点「保存 Cookie」后生效）' : ''
+    if (v === true) {
+      out.textContent = 'Cookie 有效' + (d.account ? `（账号：${d.account}）` : '') + tail
+      out.className = 'hint ok'
+    } else if (v === false) {
+      out.textContent = 'Cookie 已失效，重新扫码登录夸克吧' + tail
+      out.className = 'hint warn'
+    } else {
+      // 服务端返回 null = 判断不出来（夸克接口异常），别乱改 Cookie
+      out.textContent = '判断不出来（夸克接口没给准信），Cookie 保持原样' + tail
+      out.className = 'hint warn'
+    }
+  } catch (e) {
+    out.textContent = '检测失败：' + (e.message || '网络错误')
+    out.className = 'hint warn'
+  } finally {
+    btn.disabled = false
+  }
+})
 $('#set-theme').addEventListener('change', (e) => {
   localStorage.setItem('cm.theme', e.target.value)
   applyTheme()

@@ -76,6 +76,12 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .btn.big { min-height: 52px; font-size: 16px; border-radius: 16px; }
 .btn.sm { min-height: 38px; padding: 0 14px; font-size: 14px; border-radius: 11px; }
 .btn:disabled { opacity: .45; }
+/* 两个按钮并排（保存 / 检测） */
+.btn-row { display: flex; gap: 10px; margin-top: 4px; }
+.btn-row .btn { flex: 1; }
+/* 检测结果：绿=有效，金=有问题 */
+.hint.ok { color: #1E8E57; }
+.hint.warn { color: #D2993B; }
 
 .lcard {
   background: var(--surface); border: 1px solid var(--line);

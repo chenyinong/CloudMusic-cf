@@ -235,7 +235,11 @@
         <div class="or sm"><span>或手动粘贴</span></div>
         <label for="set-cookie">夸克网盘 Cookie</label>
         <textarea id="set-cookie" rows="3" placeholder="完整 Cookie（含 __pus）"></textarea>
-        <button id="set-save" class="btn primary block">保存 Cookie</button>
+        <div class="btn-row">
+          <button id="set-save" class="btn primary">保存 Cookie</button>
+          <button id="set-check" class="btn">检测有效性</button>
+        </div>
+        <p id="set-check-out" class="hint" hidden></p>
       </div>
 
       <div class="group-title">外观与歌词</div>
