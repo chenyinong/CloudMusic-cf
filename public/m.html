@@ -115,20 +115,20 @@
 
   <main id="pages" class="pages">
 
-    <!-- 我的（曲库） -->
+    <!-- 我的（收藏） -->
     <section class="page" data-page="library">
       <div class="hero">
-        <span class="hero-label">MY LIBRARY</span>
-        <div class="hero-num"><b id="hero-count">0</b><span>首歌曲</span></div>
-        <div class="hero-meta"><span id="hero-source">0 个音源</span><i></i><span id="hero-artist">0 位歌手</span></div>
-        <svg class="hero-deco"><use href="#i-music"/></svg>
+        <span class="hero-label">MY FAVORITES</span>
+        <div class="hero-num"><b id="hero-count">0</b><span>首收藏</span></div>
+        <div class="hero-meta"><span id="hero-source">0 位歌手</span><i></i><span id="hero-artist">0 张专辑</span></div>
+        <svg class="hero-deco"><use href="#i-heart"/></svg>
         <span class="hero-ring r1"></span><span class="hero-ring r2"></span>
       </div>
 
       <div class="sticky-search">
         <div class="search-field">
           <svg><use href="#i-search"/></svg>
-          <input id="lib-search" type="search" placeholder="搜索歌曲 / 歌手 / 专辑" />
+          <input id="lib-search" type="search" placeholder="搜索收藏的歌曲 / 歌手" />
         </div>
       </div>
 
@@ -159,10 +159,24 @@
           </select>
           <button id="pl-import" class="btn primary">导入</button>
         </div>
-        <p class="hint">支持 QQ 音乐歌单、网易云歌单；导入后回到「我的」点歌播放。</p>
+        <p class="hint">支持 QQ 音乐歌单、网易云歌单；登录账号后导入的歌单会自动保存到云端。</p>
       </div>
-      <div class="group-title">我的收藏</div>
-      <div id="fav-list" class="songlist"></div>
+
+      <div class="group-title">我的歌单</div>
+      <div id="plist-list" class="plist"></div>
+    </section>
+
+    <!-- 歌单详情 -->
+    <section class="page" data-page="detail" hidden>
+      <div class="pl-head">
+        <button id="pl-back" class="icon-btn" aria-label="返回"><svg><use href="#i-down"/></svg></button>
+        <div class="pl-head-main">
+          <h2 id="pl-title">歌单</h2>
+          <span id="pl-meta" class="muted"></span>
+        </div>
+        <button id="pl-play-all" class="play-all" aria-label="播放全部"><svg><use href="#i-play"/></svg></button>
+      </div>
+      <div id="pl-tracks" class="songlist"></div>
     </section>
 
     <!-- 搜歌 -->
@@ -194,10 +208,8 @@
             <span class="brand-icon"><svg><use href="#i-cloud"/></svg></span>
             <div class="lcard-title"><b>已登录</b><span id="acc-name" class="muted"></span></div>
           </div>
-          <button id="acc-save" class="btn primary block">保存当前歌单到云端</button>
-          <p class="hint">导入或播放中的歌单会上传，换设备登录可恢复。</p>
-          <div class="group-title sm">云端歌单</div>
-          <div id="acc-list" class="songlist"></div>
+          <button id="acc-save" class="btn primary block">把本机歌单同步到云端</button>
+          <p class="hint">本机尚未同步的歌单会上传；已同步的歌单在「歌单」页里管理和打开。</p>
           <button id="acc-logout" class="btn text block">退出登录</button>
         </div>
       </div>

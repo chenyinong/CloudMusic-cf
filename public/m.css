@@ -430,6 +430,31 @@ svg { width: 22px; height: 22px; fill: currentColor; display: block; }
   box-shadow: var(--shadow);
 }
 
+/* 歌单列表（我的歌单页） */
+.plist { display: flex; flex-direction: column; gap: 8px; }
+.pli {
+  display: flex; align-items: center; gap: 12px; padding: 10px;
+  background: var(--surface); border-radius: 16px; border: 1px solid var(--glass-line);
+}
+.pli-cover {
+  width: 52px; height: 52px; border-radius: 12px; flex: none;
+  background-size: cover; background-position: center;
+}
+.pli-main { flex: 1; min-width: 0; }
+.pli-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pli-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.pli-act {
+  background: none; border: 1px solid var(--glass-line); color: var(--text);
+  border-radius: 9px; padding: 6px 11px; font-size: 13px; flex: none;
+}
+.pli-act.danger { color: #d23f3f; }
+
+/* 歌单详情页头部 */
+.pl-head { display: flex; align-items: center; gap: 12px; padding: 6px 2px 16px; }
+.pl-head-main { flex: 1; min-width: 0; }
+.pl-head-main h2 { font-size: 19px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-head-main .muted { font-size: 12px; margin-top: 3px; display: block; }
+
 .cpl { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid rgba(0, 0, 0, .06); }
 .cpl-main { flex: 1; min-width: 0; }
 .cpl-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

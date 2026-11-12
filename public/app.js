@@ -9,6 +9,8 @@ const MODE = {
 
 const state = {
   playlist: loadJSON('cm.playlist'),
+  /** 歌单集合：导入的歌单都进这里，顶部「我的歌单」可点开 */
+  plists: loadJSON('cm.plists') || [],
   cookie: localStorage.getItem('cm.cookie') || '',
   index: -1,
   busy: false,
@@ -339,9 +341,12 @@ async function importPlaylist() {
     audio.pause()
     audio.removeAttribute('src')
     audio.load()
+    await addPlaylist(pl)
     renderList()
     renderPlayer()
-    setStatus(`导入成功，共 ${pl.tracks.length} 首`, true)
+    setStatus(state.account?.token
+      ? `导入成功，共 ${pl.tracks.length} 首，已同步到云端`
+      : `导入成功，共 ${pl.tracks.length} 首（登录账号可自动同步云端）`, true)
     showNotes([])
   } catch (e) {
     setStatus(`导入失败：${e.message}`)
@@ -349,6 +354,147 @@ async function importPlaylist() {
   } finally {
     btn.disabled = false
   }
+}
+
+/* ══════════ 歌单集合（本地 + 云端） ══════════ */
+function savePlists() {
+  // 已同步的歌单只留元数据，歌曲列表在云端，点开时按需拉取
+  saveJSON('cm.plists', state.plists.map((p) => (p.synced
+    ? { id: p.id, cloudId: p.cloudId, name: p.name, platform: p.platform, count: p.count, updatedAt: p.updatedAt, synced: true }
+    : p)))
+}
+function renderPlists() {
+  const root = $('#plists')
+  if (!root) return
+  $('#plists-meta').textContent = state.plists.length
+    ? `${state.plists.length} 张 · 登录账号后导入会自动同步到云端`
+    : '导入的歌单都在这里，点一下即可载入'
+  if (!state.plists.length) {
+    root.innerHTML = '<div class="empty">还没有歌单</div>'
+    return
+  }
+  root.innerHTML = state.plists.map((p) => `
+    <div class="pli" data-id="${esc(p.id)}">
+      <div class="pli-cover"></div>
+      <div class="pli-main">
+        <div class="pli-title">${esc(p.name)}</div>
+        <div class="pli-sub">${esc(p.platform === 'qq' ? 'QQ 音乐' : '网易云')} · ${p.count || 0} 首 · ${p.synced ? '云端' : '本机'}</div>
+      </div>
+      <button class="pli-act" data-act="open" data-id="${esc(p.id)}">载入</button>
+      <button class="pli-act danger" data-act="del" data-id="${esc(p.id)}">删除</button>
+    </div>`).join('')
+  root.querySelectorAll('.pli-cover').forEach((el) => {
+    const p = state.plists.find((x) => x.id === el.parentElement.dataset.id)
+    if (p) el.style.backgroundImage = `url("${CoverArt.generated(p.name)}")`
+  })
+  root.querySelectorAll('[data-act]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (b.dataset.act === 'open') openPlaylist(b.dataset.id)
+      else deletePlaylist(b.dataset.id)
+    }))
+  root.querySelectorAll('.pli').forEach((el) =>
+    el.addEventListener('click', () => openPlaylist(el.dataset.id)))
+}
+async function openPlaylist(id) {
+  const p = state.plists.find((x) => x.id === id)
+  if (!p) return
+  if (p.synced && !p.tracks?.length) {
+    if (!state.account?.token) { setStatus('云端歌单需要先登录账号', false); return }
+    try {
+      const d = await api('/api/playlists/' + p.cloudId)
+      p.tracks = JSON.parse(d.tracks)
+      p.count = p.tracks.length
+    } catch (e) { setStatus('读取云端歌单失败：' + e.message, false); return }
+  }
+  state.playlist = { name: p.name, platform: p.platform, id: p.id, tracks: p.tracks }
+  state.index = -1
+  state.resolved = null
+  saveJSON('cm.playlist', state.playlist)
+  loadLyric(null)
+  renderList()
+  renderPlayer()
+  setStatus(`已载入歌单「${p.name}」，共 ${p.tracks?.length || 0} 首`, true)
+}
+async function deletePlaylist(id) {
+  const p = state.plists.find((x) => x.id === id)
+  if (!p) return
+  if (!confirm(`删除歌单「${p.name}」？`)) return
+  if (p.synced && p.cloudId) {
+    if (!state.account?.token) { setStatus('请先登录账号再删除云端歌单', false); return }
+    try { await api('/api/playlists/' + p.cloudId, { method: 'DELETE' }) }
+    catch (e) { setStatus('删除云端歌单失败：' + e.message, false); return }
+  }
+  state.plists = state.plists.filter((x) => x.id !== id)
+  savePlists()
+  renderPlists()
+  setStatus('已删除', true)
+}
+/** 导入的歌单进集合；已登录则同时存到云端 */
+async function addPlaylist(pl) {
+  let item
+  if (state.account?.token) {
+    try {
+      const d = await api('/api/playlists', { method: 'POST', body: { name: pl.name, platform: pl.platform, tracks: pl.tracks } })
+      item = { id: 'c' + d.id, cloudId: d.id, name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: true }
+    } catch {
+      setStatus('云端保存失败，已存在本机', false)
+      item = { id: 'l' + Date.now(), name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: false, tracks: pl.tracks }
+    }
+  } else {
+    item = { id: 'l' + Date.now(), name: pl.name, platform: pl.platform, count: pl.tracks.length, updatedAt: Date.now(), synced: false, tracks: pl.tracks }
+  }
+  state.plists.unshift(item)
+  savePlists()
+  renderPlists()
+  return item
+}
+/** 登录后把本机尚未同步的歌单补传云端 */
+async function syncLocalLists(verbose = false) {
+  const pending = state.plists.filter((p) => !p.synced && p.tracks?.length)
+  if (!pending.length) { if (verbose) setStatus('没有需要同步的歌单', true); return }
+  let ok = 0
+  for (const p of pending) {
+    try {
+      const d = await api('/api/playlists', { method: 'POST', body: { name: p.name, platform: p.platform, tracks: p.tracks } })
+      p.id = 'c' + d.id
+      p.cloudId = d.id
+      p.synced = true
+      p.updatedAt = Date.now()
+      delete p.tracks
+      ok++
+    } catch { /* 保留在本机 */ }
+  }
+  savePlists()
+  renderPlists()
+  setStatus(ok ? `已同步 ${ok} 张歌单到云端` : '同步失败，请稍后再试', true)
+}
+/** 拉取云端歌单并合并进集合；同名同平台的本机歌单视为已同步，避免重复 */
+async function loadCloudLists() {
+  if (!state.account?.token) return
+  try {
+    const list = await api('/api/playlists')
+    for (const p of list) {
+      const cid = 'c' + p.id
+      let exist = state.plists.find((x) => x.cloudId === p.id)
+      if (!exist) exist = state.plists.find((x) => !x.synced && x.name === p.name && x.platform === p.platform)
+      if (exist) {
+        exist.cloudId = p.id
+        exist.id = cid
+        exist.synced = true
+        exist.count = p.count ?? exist.count
+        exist.updatedAt = p.updated_at || exist.updatedAt
+        delete exist.tracks
+      } else {
+        state.plists.unshift({
+          id: cid, cloudId: p.id, name: p.name, platform: p.platform,
+          count: p.count || 0, updatedAt: p.updated_at || Date.now(), synced: true,
+        })
+      }
+    }
+    savePlists()
+    renderPlists()
+  } catch (e) { setStatus('读取云端歌单失败：' + e.message, false) }
 }
 
 function setPlaylist(pl, idx) {
@@ -713,22 +859,22 @@ function renderAccount() {
   if (state.account?.token) {
     out.hidden = true; inn.hidden = false
     $('#acc-name').textContent = state.account.username || ''
-    loadCloudList()
   } else { out.hidden = false; inn.hidden = true }
 }
-function loginAccountD() {
+async function loginAccountD() {
   const msg = $('#acc-msg'); msg.textContent = ''
   const username = $('#acc-user').value.trim(), password = $('#acc-pass').value
   if (!username || !password) { msg.textContent = '用户名和密码都要填'; return }
-  api('/api/auth/login', { method: 'POST', body: { username, password } })
-    .then((d) => {
-      state.account = { token: d.token, username: d.username }
-      saveJSON('cm.account', state.account)
-      $('#acc-pass').value = ''
-      renderAccount()
-      setStatus('登录成功，可同步歌单', true)
-    })
-    .catch((e) => { msg.textContent = e.message })
+  try {
+    const d = await api('/api/auth/login', { method: 'POST', body: { username, password } })
+    state.account = { token: d.token, username: d.username }
+    saveJSON('cm.account', state.account)
+    $('#acc-pass').value = ''
+    renderAccount()
+    setStatus('登录成功', true)
+    await loadCloudLists()
+    await syncLocalLists()
+  } catch (e) { msg.textContent = e.message }
 }
 function logoutAccountD(silent) {
   state.account = null
@@ -737,58 +883,9 @@ function logoutAccountD(silent) {
   $('#acc-in').hidden = true
   if (!silent) setStatus('已退出登录', true)
 }
-async function loadCloudList() {
-  const root = $('#acc-list')
-  root.innerHTML = '<div class="empty">加载中…</div>'
-  try {
-    const list = await api('/api/playlists')
-    if (!list.length) { root.innerHTML = '<div class="empty">还没有云端歌单，点上方保存</div>'; return }
-    root.innerHTML = list.map((p) => `
-      <div class="cpl">
-        <div class="cpl-main"><div class="cpl-title">${esc(p.name)}</div><div class="cpl-sub">${esc(p.platform === 'qq' ? 'QQ 音乐' : '网易云')} · ${new Date(p.updated_at).toLocaleDateString()}</div></div>
-        <button class="cpl-act" data-act="load" data-id="${p.id}">加载</button>
-        <button class="cpl-act danger" data-act="del" data-id="${p.id}">删除</button>
-      </div>`).join('')
-    root.querySelectorAll('[data-act]').forEach((b) =>
-      b.addEventListener('click', () =>
-        b.dataset.act === 'load' ? openCloud(Number(b.dataset.id)) : deleteCloud(Number(b.dataset.id)))
-    )
-  } catch (e) { root.innerHTML = '<div class="empty">' + esc(e.message) + '</div>' }
-}
-async function saveCloudD() {
-  if (!state.account?.token) { setStatus('先登录账号', false); return }
-  if (!state.playlist?.tracks?.length) { setStatus('当前没有歌单可保存', false); return }
-  const name = prompt('给云端歌单起个名字', state.playlist.name || '我的歌单')
-  if (name === null) return
-  try {
-    await api('/api/playlists', { method: 'POST', body: {
-      name: name.trim() || '我的歌单',
-      platform: state.playlist.platform || 'netease',
-      tracks: state.playlist.tracks,
-    } })
-    setStatus('已保存到云端', true)
-    loadCloudList()
-  } catch (e) { setStatus('保存失败：' + e.message, false) }
-}
-async function openCloud(id) {
-  try {
-    const pl = await api('/api/playlists/' + id)
-    state.playlist = { name: pl.name, platform: pl.platform, id: pl.id, tracks: JSON.parse(pl.tracks) }
-    state.index = -1
-    state.resolved = null
-    saveJSON('cm.playlist', state.playlist)
-    renderList()
-    setStatus(`已从云端载入：${pl.name}`, true)
-  } catch (e) { setStatus('载入失败：' + e.message, false) }
-}
-async function deleteCloud(id) {
-  if (!confirm('删除这条云端歌单？')) return
-  try { await api('/api/playlists/' + id, { method: 'DELETE' }); loadCloudList() }
-  catch (e) { setStatus('删除失败：' + e.message, false) }
-}
 $('#acc-login').addEventListener('click', loginAccountD)
 $('#acc-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') loginAccountD() })
-$('#acc-save').addEventListener('click', saveCloudD)
+$('#acc-save').addEventListener('click', () => syncLocalLists(true))
 $('#acc-logout').addEventListener('click', () => logoutAccountD(false))
 
 $('#btn-qr-login').addEventListener('click', async () => {
@@ -911,3 +1008,5 @@ if ('serviceWorker' in navigator) {
 }
 applyTheme()
 renderAccount()
+renderPlists()
+if (state.account?.token) loadCloudLists()

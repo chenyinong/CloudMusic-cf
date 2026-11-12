@@ -5,4 +5,5 @@ dist/
 wrangler-dev.log
 *.log
 *.err
+.playwright-cli/
 .DS_Store

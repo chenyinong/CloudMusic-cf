@@ -232,6 +232,17 @@ details pre { white-space: pre-wrap; word-break: break-all; background: rgba(0,0
 .cpl-sub { font-size: 12px; color: #8a8f9c; margin-top: 2px; }
 .cpl-act { background: none; border: 1px solid rgba(0, 0, 0, .12); color: #6c5ce7; border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
 .cpl-act.danger { color: #d23f3f; border-color: rgba(210, 63, 63, .3); }
+
+/* 歌单集合（我的歌单） */
+.pli { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid rgba(0, 0, 0, .06); cursor: pointer; }
+.pli:hover .pli-title { color: #6c5ce7; }
+.pli-cover { width: 44px; height: 44px; border-radius: 8px; flex: none; background: linear-gradient(135deg, #e9e6ff, #f4f6fb); background-size: cover; background-position: center; }
+.pli-main { flex: 1; min-width: 0; }
+.pli-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pli-sub { font-size: 12px; color: #8a8f9c; margin-top: 2px; }
+.pli-act { background: none; border: 1px solid rgba(0, 0, 0, .12); color: #6c5ce7; border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.pli-act.danger { color: #d23f3f; border-color: rgba(210, 63, 63, .3); }
+.plists-card .tracks { margin-top: 6px; }
 .pp-source { margin-top: 16px; font-size: 13px; opacity: 0.65; }
 .pp-lyric { justify-content: center; }
 .pp-lyric-inner {

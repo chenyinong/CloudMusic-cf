@@ -42,6 +42,16 @@
       <p class="hint">支持 QQ 音乐歌单、网易云歌单；导入后点歌名即可播放。</p>
     </section>
 
+    <section class="card plists-card">
+      <div class="list-head">
+        <div>
+          <h2>我的歌单</h2>
+          <span id="plists-meta" class="muted">导入的歌单都在这里，点一下即可载入</span>
+        </div>
+      </div>
+      <div id="plists" class="tracks"></div>
+    </section>
+
     <section class="card search-card">
       <label for="search-input">搜索点歌</label>
       <div class="row">
@@ -216,9 +226,8 @@
         </div>
         <div id="acc-in" hidden>
           <div class="divider">已登录：<span id="acc-name"></span></div>
-          <button id="acc-save" class="primary">保存当前歌单到云端</button>
-          <p class="hint">导入或播放中的歌单会上传，换设备登录可恢复。</p>
-          <div id="acc-list" class="tracks"></div>
+          <button id="acc-save" class="primary">把本机歌单同步到云端</button>
+          <p class="hint">登录后导入的歌单会自动保存到云端，换设备登录可恢复；点上方「我的歌单」查看全部。</p>
           <button id="acc-logout" class="ghost">退出登录</button>
         </div>
       </div>

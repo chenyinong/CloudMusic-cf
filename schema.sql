@@ -1,6 +1,6 @@
 -- 账号与歌单存储。执行：
---   本地：wrangler d1 execute cloudmusic --local --file=schema.sql
---   线上：wrangler d1 execute cloudmusic --remote --file=schema.sql
+--   本地：wrangler d1 execute cloudmusic-cf --local --file=schema.sql
+--   线上：wrangler d1 execute cloudmusic-cf --remote --file=schema.sql
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,

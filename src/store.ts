@@ -58,14 +58,14 @@ export async function savePlaylist(
 export async function listPlaylists(
   db: D1Database,
   userId: number
-): Promise<Array<{ id: number; name: string; platform: string; updated_at: number }>> {
+): Promise<Array<{ id: number; name: string; platform: string; updated_at: number; count: number }>> {
   const r = await db
     .prepare(
-      'SELECT id, name, platform, updated_at FROM playlists WHERE user_id = ? ORDER BY updated_at DESC'
+      "SELECT id, name, platform, updated_at, CASE WHEN json_valid(tracks) THEN json_array_length(tracks) ELSE 0 END AS count FROM playlists WHERE user_id = ? ORDER BY updated_at DESC"
     )
     .bind(userId)
     .all()
-  return r.results as Array<{ id: number; name: string; platform: string; updated_at: number }>
+  return r.results as Array<{ id: number; name: string; platform: string; updated_at: number; count: number }>
 }
 
 export async function getPlaylist(
