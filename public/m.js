@@ -969,12 +969,21 @@ function renderSleep() {
 }
 
 /* ══════════ 弹层 ══════════ */
+/*
+ * 弹层的菜单框是整块 innerHTML 换掉的，所以标题行必须跟菜单项一起重建。
+ *
+ * 原来写的是「先给 #sheet-head 设标题，再 box.innerHTML = ... 换掉整个菜单框」——
+ * innerHTML 会把 #sheet-head 这个节点本身一起冲掉，于是第一次开完弹层，
+ * #sheet-head 就永久没了；之后每次开弹层，$('#sheet-head') 拿到 null，
+ * 赋 textContent 直接抛 TypeError，函数中断在 $('#sheet').hidden = false 之前，
+ * 菜单就再也打不开（控制台只剩一行报错）。
+ */
 function openSongSheet(t) {
   if (!t) return
   sheetTrack = t
   const box = $('#sheet .sheet-box')
-  $('#sheet-head').textContent = `${t.title} · ${t.artist || '未知歌手'}`
   box.innerHTML = `
+    <div class="sheet-head" id="sheet-head">${esc(t.title)} · ${esc(t.artist || '未知歌手')}</div>
     <button class="sheet-item" data-act="play">播放这首</button>
     <button class="sheet-item" data-act="favthis">${state.favs.some((f) => f.key === t.key) ? '取消收藏' : '收藏这首'}</button>
     <button class="sheet-item" data-act="infothis">歌曲信息</button>
@@ -986,8 +995,8 @@ function openPlayerSheet() {
   sheetTrack = null
   const t = current()
   const box = $('#sheet .sheet-box')
-  $('#sheet-head').textContent = t ? `${t.title} · ${t.artist || ''}` : '播放'
   box.innerHTML = `
+    <div class="sheet-head" id="sheet-head">${t ? `${esc(t.title)} · ${esc(t.artist || '')}` : '播放'}</div>
     <button class="sheet-item" data-act="info">歌曲信息</button>
     <button class="sheet-item" data-act="queue">播放列表</button>
     <button class="sheet-item" data-act="sleep15">定时关闭 · 15 分钟</button>
