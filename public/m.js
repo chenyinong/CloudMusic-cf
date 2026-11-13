@@ -632,7 +632,8 @@ function setPlaylist(pl, idx) {
   playAt(idx)
 }
 let playToken = 0            // 连点时只认最后一次
-const prefetching = new Set()  // 正在预取的歌（防止同一首重复预取）
+/** key -> 正在解析的 Promise：切歌时直接复用，不再多发一次手机→CF 往返 */
+const prefetching = new Map()
 async function playAt(i, attempt = 0) {
   const pl = state.playlist
   if (!pl || !pl.tracks[i]) return
@@ -645,12 +646,23 @@ async function playAt(i, attempt = 0) {
   onTrackChanged(t)
   renderLibrary()
   renderMini()
+  // 预取必须跟当前歌的解析「同时」跑。以前放在 finally，等于要等当前歌
+  // 冷解析 3 秒回来才开始预取下一首 —— 用户切歌时永远赶不上它。
+  prefetchNeighbors()
   try {
     // 有缓存：不等网络，直接起播（重试时跳过缓存，强制重新解析）
     const cached = attempt ? null : resolvedGet(t)
     if (cached) {
       startResolved(i, t, cached, true, attempt)
     } else {
+      // 上一首的预取正在解析这首歌 → 直接等同一个 Promise，省一次跨境往返
+      const flying = attempt ? null : prefetching.get(resolvedKey(t))
+      if (flying) {
+        const r = await flying
+        if (token !== playToken) return
+        if (r) { startResolved(i, t, r, false, attempt); return }
+        // 预取失败就照常自己解析
+      }
       toast('正在找完整版…')
       const d = await post('/api/resolve', {
         title: t.title, artist: t.artist, durationSec: t.durationSec,
@@ -672,7 +684,6 @@ async function playAt(i, attempt = 0) {
       renderLibrary()
       renderMini()
       renderSourceInfo()
-      prefetchNeighbors()
     }
   }
 }
@@ -690,10 +701,12 @@ function startResolved(i, t, resolved, fromCache, attempt) {
     if (myToken !== playToken) return
     if (/NotAllowed/i.test(name + msg)) { $('#tap-to-play').hidden = false; return }
     if (fromCache) {
-      // 缓存的直链可能已经失效：清掉重新解析一次
+      // 缓存的直链可能已经失效：清掉并以 fresh 重签。
+      // 不能不带 attempt 重来 —— 服务端解析缓存还有 30 分钟，
+      // 会把同一条坏直链又发回来，然后无限重试。
       resolvedDrop(t)
       toast('直链失效，正在重新解析…')
-      setTimeout(() => playAt(i), 60)
+      setTimeout(() => playAt(i, 1), 60)
       return
     }
     if (attempt < 2) {
@@ -735,29 +748,40 @@ function prefetchNeighbors() {
     prefetchTimer = setTimeout(() => prefetchOne(nextIndex(3)), 800)
   }, 800)
 }
-/** 预取一首歌的音源（已经在缓存里 / 已在预取就跳过） */
+/**
+ * 预取一首歌的音源，返回解析结果（或 null）。
+ * 同一个 key 只发一次请求：Promise 落在 prefetching Map 里，
+ * 切歌时 playAt 直接 await 它，不用再发一条 resolve。
+ */
 async function prefetchOne(i) {
   const pl = state.playlist
-  if (i < 0 || !pl?.tracks?.[i]) return
+  if (i < 0 || !pl?.tracks?.[i]) return null
   const t = pl.tracks[i]
   const k = resolvedKey(t)
-  if (!k) return
+  if (!k) return null
   // 已经解析过的也要把音频头焐热：切歌时 audio 一上来就有数据
   const cached = resolvedGet(t)
-  if (cached) { warmAudio(cached.url); return }
-  if (prefetching.has(k)) return
-  prefetching.add(k)
-  try {
-    const d = await post('/api/resolve', {
-      title: t.title, artist: t.artist, durationSec: t.durationSec,
-      platformId: t.platformId, cookie: state.cookie, quarkId: t.quarkId,
-    })
-    if (d.ok && d.resolved) {
-      resolvedPut(t, d.resolved)
-      warmAudio(d.resolved.url)
-    }
-  } catch { /* 预取失败无所谓，真播的时候再解析 */ }
-  prefetching.delete(k)
+  if (cached) { warmAudio(cached.url); return cached }
+  if (prefetching.has(k)) return prefetching.get(k)
+  const p = (async () => {
+    try {
+      const d = await post('/api/resolve', {
+        title: t.title, artist: t.artist, durationSec: t.durationSec,
+        platformId: t.platformId, cookie: state.cookie, quarkId: t.quarkId,
+        // 后台预取：服务端跳过直链探活，少一次跨境往返（坏链由播放时重试兜底）
+        prefetch: true,
+      })
+      if (d.ok && d.resolved) {
+        resolvedPut(t, d.resolved)
+        warmAudio(d.resolved.url)
+        return d.resolved
+      }
+      return null
+    } catch { return null }               /* 预取失败无所谓，真播的时候再解析 */
+    finally { prefetching.delete(k) }
+  })()
+  prefetching.set(k, p)
+  return p
 }
 
 /** 本会话里已经焐热过音频头的直链（不重复拉） */

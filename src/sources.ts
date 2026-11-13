@@ -237,7 +237,7 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     touchQuark()
     let c: Cand | null = null
     try {
-      c = await busy(() => quarkCandById(h.id, cookie, touchQuark))
+      c = await busy(() => quarkCandById(h.id, cookie, touchQuark, !req.prefetch))
     } catch (e) {
       notes.push(`夸克「${h.title}」签发失败（${errMsg(e)}，${Date.now() - t0}ms）`)
       touchQuark()
@@ -273,7 +273,7 @@ async function resolveTrackInner(req: ResolveRequest, secret: string): Promise<R
     }
     // 搜歌结果里点了某条网盘资源 → 直接用它，别再搜一遍挑同名文件
     if (req.quarkId) {
-      const c = await quarkCandById(req.quarkId, cookie).catch(() => null)
+      const c = await quarkCandById(req.quarkId, cookie, undefined, !req.prefetch).catch(() => null)
       touchQuark()
       if (!c) {
         notes.push('夸克：指定的网盘资源不可用，改走搜索')
@@ -772,12 +772,13 @@ async function lmySharesOf(id: string): Promise<string[]> {
 async function quarkCandById(
   id: string,
   cookie: string,
-  onProgress?: () => void
+  onProgress?: () => void,
+  probe = true
 ): Promise<Cand | null> {
   const shares = await lmySharesOf(id)
   if (!shares.length) return null
   for (const share of shares) {
-    const q = await quarkDirect(share, cookie, onProgress).catch(() => null)
+    const q = await quarkDirect(share, cookie, onProgress, probe).catch(() => null)
     if (!q) continue
     return {
       url: q.url,

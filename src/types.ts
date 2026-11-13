@@ -94,4 +94,10 @@ export interface ResolveRequest {
   fresh?: boolean
   /** 这一轮先别用夸克（夸克直链反复失效时，退回公开源兜底） */
   skipQuark?: boolean
+  /**
+   * 这是后台预取（不是用户正在等着播）。
+   * 预取跳过多余的直链探活，少一次跨境往返；坏链由播放时的重试阶梯兜底。
+   * 注意：这个标志不参与 resolveCacheKey —— 预取算好的结果播放时直接复用。
+   */
+  prefetch?: boolean
 }

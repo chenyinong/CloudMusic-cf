@@ -288,10 +288,16 @@ async function probeSigned(
   }
 }
 
+/**
+ * @param probe 签完要不要再探一次直链（一次完整的跨境往返，约 0.7~1.2s）。
+ *              后台预取传 false：坏链交给播放时的 fresh 重试阶梯处理，
+ *              没必要让每首预取都白付这一跳。
+ */
 export async function quarkDirect(
   shareUrl: string,
   cookie: string,
-  onProgress?: () => void
+  onProgress?: () => void,
+  probe = true
 ): Promise<QuarkDirect | null> {
   const pwdId = pwdIdOf(shareUrl)
   if (!pwdId || !cookie.trim()) return null
@@ -337,6 +343,9 @@ export async function quarkDirect(
         size: f.size || dl.size,
         durationSec: f.durationSec || dl.durationSec,
       }
+      // 后台预取不探活：这一跳跨境往返要 0.7~1.2 秒，而坏链播放时有重试阶梯。
+      // 只签一次、直接给结果，是冷解析里最省时间的一刀。
+      if (!probe) return cand
       // 签完先探一下：412 说明 Cookie 跟直链对不上，这条废了，换下一个文件/分享
       const state = await probeSigned(dl.url, dl.cookie)
       onProgress?.()
